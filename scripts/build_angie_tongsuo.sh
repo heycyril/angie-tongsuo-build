@@ -363,14 +363,48 @@ package_output() {
     local pkg_dir="${output_dir}/${OUTPUT_NAME}"
     mkdir -p "$pkg_dir"
 
-    # 复制二进制
+    # 复制二进制（strip 减小体积）
     mkdir -p "${pkg_dir}/sbin"
     cp "$angie_bin" "${pkg_dir}/sbin/"
+    strip "${pkg_dir}/sbin/angie" 2>/dev/null || true
 
-    # 复制配置和默认文件
+    # 复制默认配置和默认文件
     cp -r "${PREFIX}/conf" "${pkg_dir}/conf" 2>/dev/null || true
     cp -r "${PREFIX}/html" "${pkg_dir}/html" 2>/dev/null || true
-    cp -r "${PREFIX}/logs" "${pkg_dir}/logs" 2>/dev/null || true
+    mkdir -p "${pkg_dir}/logs"
+
+    # 用仓库内的生产配置覆盖默认配置（保留 mime.types 等）
+    local repo_root
+    repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+    if [ -d "${repo_root}/config" ]; then
+        log_info "打入仓库配置: ${repo_root}/config"
+        cp -f "${repo_root}/config/"*.conf "${pkg_dir}/conf/"
+    else
+        log_warn "未找到 ${repo_root}/config，使用 Angie 默认配置"
+    fi
+
+    # 打入公开证书（不含私钥；私钥由部署时在本地放入，永不上传）
+    if [ -d "${repo_root}/cert" ]; then
+        log_info "打入公开证书: ${repo_root}/cert"
+        cp -r "${repo_root}/cert" "${pkg_dir}/cert"
+    else
+        log_warn "未找到 ${repo_root}/cert，安装包不含证书"
+    fi
+    # 双保险：产物中绝不允许出现私钥
+    find "${pkg_dir}/cert" \( -name "*.key" -o -name "key.pem" \) -delete 2>/dev/null || true
+    if grep -rIl "PRIVATE KEY" "${pkg_dir}/cert" 2>/dev/null | grep -q .; then
+        log_error "检测到安装包含私钥，已中止打包"
+    fi
+    # 预留私钥位置说明（部署时替换）
+    cat > "${pkg_dir}/cert/PUT_PRIVATE_KEYS_HERE.txt" << 'EOF'
+安装包出于安全考虑不包含任何私钥。部署前请放入：
+  cert/rsa/key.pem
+  cert/sm2/server_sign.key
+  cert/sm2/server_enc.key
+  cert/sm2/client_sign.key   (仅双向认证需要)
+  cert/sm2/client_enc.key    (仅双向认证需要)
+权限建议：chmod 600 <上述文件>
+EOF
 
     # 复制动态模块（如有）
     if [ -d "${PREFIX}/modules" ]; then
@@ -384,46 +418,88 @@ package_output() {
     mkdir -p "${pkg_dir}/luajit/include"
     cp -r "${LUAJIT_PREFIX}/include/luajit-2.1" "${pkg_dir}/luajit/include/" 2>/dev/null || true
 
-    # 创建启动脚本
+    # 创建启动脚本（-p 指定 prefix，保证任意目录下都能运行）
     cat > "${pkg_dir}/start.sh" << 'SCRIPT'
 #!/bin/bash
 # Angie 启动脚本（带 Tongsuo 国密SSL）
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-export LD_LIBRARY_PATH="${SCRIPT_DIR}/luajit/lib:${LD_LIBRARY_PATH}"
+export LD_LIBRARY_PATH="${SCRIPT_DIR}/luajit/lib:${LD_LIBRARY_PATH:-}"
 
 ANGIE_BIN="${SCRIPT_DIR}/sbin/angie"
-ANGIE_CONF="${SCRIPT_DIR}/conf/angie.conf"
+# 关键：-p 指定安装根目录，使 cert/ html/ logs/ 等相对路径正确解析
+ANGIE_OPTS=(-p "${SCRIPT_DIR}" -c conf/angie.conf)
+
+mkdir -p "${SCRIPT_DIR}/logs"
 
 case "$1" in
     start)
         echo "Starting Angie..."
-        "$ANGIE_BIN" -c "$ANGIE_CONF"
+        "${ANGIE_BIN}" "${ANGIE_OPTS[@]}"
         ;;
     stop)
         echo "Stopping Angie..."
-        "$ANGIE_BIN" -s stop
+        "${ANGIE_BIN}" "${ANGIE_OPTS[@]}" -s stop
         ;;
     reload)
         echo "Reloading Angie..."
-        "$ANGIE_BIN" -s reload
+        "${ANGIE_BIN}" "${ANGIE_OPTS[@]}" -s reload
         ;;
     restart)
         echo "Restarting Angie..."
-        "$ANGIE_BIN" -s stop
+        "${ANGIE_BIN}" "${ANGIE_OPTS[@]}" -s stop
         sleep 1
-        "$ANGIE_BIN" -c "$ANGIE_CONF"
+        "${ANGIE_BIN}" "${ANGIE_OPTS[@]}"
         ;;
     test)
         echo "Testing Angie configuration..."
-        "$ANGIE_BIN" -t -c "$ANGIE_CONF"
+        "${ANGIE_BIN}" "${ANGIE_OPTS[@]}" -t
+        ;;
+    status)
+        if [ -f "${SCRIPT_DIR}/logs/angie.pid" ]; then
+            echo "Angie running, pid=$(cat "${SCRIPT_DIR}/logs/angie.pid")"
+        else
+            echo "Angie not running"
+        fi
         ;;
     *)
-        echo "Usage: $0 {start|stop|reload|restart|test}"
+        echo "Usage: $0 {start|stop|reload|restart|test|status}"
         exit 1
         ;;
 esac
 SCRIPT
     chmod +x "${pkg_dir}/start.sh"
+
+    # 打包前自检：产物不含私钥，因此在临时副本里生成一次性自签证书再跑 angie -t。
+    # 目的：验证配置语法、include、变量、模块、证书路径全部正确，且临时证书绝不进入安装包。
+    log_info "配置自检 (angie -t，使用一次性自签证书)..."
+    local test_root="${output_dir}/.selftest"
+    rm -rf "$test_root"
+    cp -r "$pkg_dir" "$test_root"
+
+    # 一次性 RSA 证书
+    openssl req -x509 -newkey rsa:2048 -nodes \
+        -keyout "${test_root}/cert/rsa/key.pem" -out "${test_root}/cert/rsa/cert.pem" \
+        -days 1 -subj "/CN=selftest-rsa" >/dev/null 2>&1
+    # 一次性 SM2 签名/加密双证书（OpenSSL 3.x 支持 SM2）
+    for t in sign enc; do
+        openssl ecparam -genkey -name SM2 -out "${test_root}/cert/sm2/server_${t}.key" >/dev/null 2>&1
+        openssl req -new -x509 -sm3 -sm2-id 1234567812345678 \
+            -key "${test_root}/cert/sm2/server_${t}.key" -out "${test_root}/cert/sm2/server_${t}.crt" \
+            -days 1 -subj "/CN=selftest-sm2-${t}" >/dev/null 2>&1
+    done
+
+    set +e
+    local test_out
+    test_out=$(LD_LIBRARY_PATH="${test_root}/luajit/lib:${LD_LIBRARY_PATH:-}" \
+        "${test_root}/sbin/angie" -p "${test_root}" -c conf/angie.conf -t 2>&1)
+    local test_rc=$?
+    set -e
+    echo "$test_out"
+    rm -rf "$test_root"
+    if [ $test_rc -ne 0 ]; then
+        log_error "配置自检失败，请检查 config/ 与 cert/ 路径"
+    fi
+    log_info "配置自检通过"
 
     # 创建信息文件
     cat > "${pkg_dir}/build_info.txt" << EOF
