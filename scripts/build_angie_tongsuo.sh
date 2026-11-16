@@ -488,7 +488,7 @@ SCRIPT
     for t in sign enc; do
         log_info "生成自测 SM2 ${t} 证书..."
         openssl ecparam -genkey -name SM2 -out "${test_root}/cert/sm2/server_${t}.key" || log_error "SM2 ${t} 私钥生成失败"
-        openssl req -new -x509 -sm3 -sm2-id 1234567812345678 \
+        openssl req -new -x509 -sm3 -sigopt "distid:1234567812345678" \
             -key "${test_root}/cert/sm2/server_${t}.key" -out "${test_root}/cert/sm2/server_${t}.crt" \
             -days 1 -subj "/CN=selftest-sm2-${t}" || log_error "SM2 ${t} 证书生成失败"
     done
