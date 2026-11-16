@@ -1,0 +1,93 @@
+name: Build Angie + Tongsuo (国密SSL)
+
+on:
+  workflow_dispatch:
+    inputs:
+      angie_version:
+        description: "Angie 版本 (tag name)"
+        required: false
+        default: "Angie-1.12.4"
+      tongsuo_version:
+        description: "Tongsuo 版本"
+        required: false
+        default: "8.5.0"
+      build_x86:
+        description: "编译 x86_64 版本"
+        required: false
+        default: "true"
+      build_arm:
+        description: "编译 aarch64 版本"
+        required: false
+        default: "false"
+  push:
+    branches: [main, master]
+
+concurrency:
+  group: "angie-build-${{ github.ref }}"
+  cancel-in-progress: true
+
+env:
+  DEBIAN_FRONTEND: noninteractive
+
+jobs:
+  build-x86_64:
+    name: Build x86_64 (Angie + Tongsuo 国密SSL)
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: 显示版本信息
+        run: |
+          echo "=========================================="
+          echo "  Angie   : ${{ github.event.inputs.angie_version || 'Angie-1.12.4' }}"
+          echo "  Tongsuo : ${{ github.event.inputs.tongsuo_version || '8.5.0' }}"
+          echo "  主机     : $(uname -a)"
+          echo "=========================================="
+
+      - name: 安装系统依赖
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y \
+            build-essential gcc g++ make perl git \
+            wget curl unzip tar gzip xz-utils ca-certificates \
+            libpcre3-dev zlib1g-dev libgeoip-dev gd-dev \
+            autoconf libtool pkg-config
+
+      - name: 下载并编译 (约 15-25 分钟)
+        timeout-minutes: 60
+        env:
+          ANGIE_VERSION: ${{ github.event.inputs.angie_version || 'Angie-1.12.4' }}
+          TONGSUO_VERSION: ${{ github.event.inputs.tongsuo_version || '8.5.0' }}
+          OUTPUT_DIR: /home/runner/workspace/output
+        run: |
+          chmod +x scripts/build_angie_tongsuo.sh
+          bash scripts/build_angie_tongsuo.sh
+
+      - name: 验证产物
+        run: |
+          cd /tmp && rm -rf verify && mkdir verify && cd verify
+          tar xzf /home/runner/workspace/output/*.tar.gz --strip-components=1
+          echo "=== angie -V ==="
+          ./sbin/angie -V 2>&1
+          echo "=== 检查 Tongsuo/OpenSSL ==="
+          ./sbin/angie -V 2>&1 | grep -i "openssl\|tongsuo\|ntls" || echo "(版本标识不同，可忽略)"
+
+      - name: 上传 Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: angie-tongsuo-x86_64
+          path: /home/runner/workspace/output/*.tar.gz
+          retention-days: 30
+
+      - name: 汇总
+        run: |
+          echo "## ✅ 编译完成" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| 项目 | 版本 |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Angie | ${{ github.event.inputs.angie_version || 'Angie-1.12.4' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Tongsuo | ${{ github.event.inputs.tongsuo_version || '8.5.0' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**下载 Artifact**: 查看 Actions 页面上方 Artifacts 区域" >> $GITHUB_STEP_SUMMARY
