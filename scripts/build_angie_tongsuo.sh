@@ -52,27 +52,38 @@ log_error() { echo -e "${RED}[ERROR]${NC} $*"; exit 1; }
 # 1. 安装系统依赖
 # ---------------------------------------------------------------------------
 install_deps() {
+    # 支持两种跳过方式：
+    #   a) $SKIP_SYSTEM_DEPS=1  (CI 环境已由 workflow 预装)
+    #   b) $GITHUB_ACTIONS=true (GitHub Actions runner 默认跳过)
+    if [ "${SKIP_SYSTEM_DEPS:-0}" = "1" ] || [ "${GITHUB_ACTIONS:-false}" = "true" ]; then
+        log_info "跳过系统依赖安装（CI/Runner 环境已预装）"
+        return 0
+    fi
+
+    # 自动加 sudo（非 root 用户时）
+    local SUDO=""
+    [ "$(id -u)" != "0" ] && SUDO="sudo"
+
     log_info "安装系统编译依赖..."
     if command -v apt-get &>/dev/null; then
-        apt-get update -y
-        apt-get install -y \
-            build-essential gcc g++ make perl \
-            wget curl unzip tar gzip xz-utils \
-            libpcre3-dev zlib1g-dev libgeoip-dev \
-            libgd-dev libssl-dev ca-certificates \
+        $SUDO apt-get update -y
+        $SUDO apt-get install -y \
+            build-essential gcc g++ make perl git \
+            wget curl unzip tar gzip xz-utils ca-certificates \
+            libpcre3-dev zlib1g-dev libgeoip-dev libgd-dev \
             autoconf libtool pkg-config
     elif command -v yum &>/dev/null; then
-        yum groupinstall -y "Development Tools" || true
-        yum install -y \
-            gcc gcc-c++ make perl \
+        $SUDO yum groupinstall -y "Development Tools" || true
+        $SUDO yum install -y \
+            gcc gcc-c++ make perl git \
             wget curl unzip tar gzip \
             pcre pcre-devel zlib zlib-devel geoip-devel \
             gd-devel openssl-devel ca-certificates \
             autoconf libtool pkgconfig
     elif command -v dnf &>/dev/null; then
-        dnf groupinstall -y "Development Tools" || true
-        dnf install -y \
-            gcc gcc-c++ make perl \
+        $SUDO dnf groupinstall -y "Development Tools" || true
+        $SUDO dnf install -y \
+            gcc gcc-c++ make perl git \
             wget curl unzip tar gzip \
             pcre pcre-devel zlib zlib-devel geoip-devel \
             gd-devel openssl-devel ca-certificates \
