@@ -107,7 +107,7 @@ prepare_workdir() {
 # ---------------------------------------------------------------------------
 # 3. 下载所有源码
 # ---------------------------------------------------------------------------
-# 带重试的下载函数（GitHub Actions 网络不稳定）
+# 带重试的下载函数（成功返回 0，失败返回 1，不退出脚本）
 dl() {
     local url="$1"; local out="$2"
     local attempt=0; local max=5
@@ -117,9 +117,9 @@ dl() {
             return 0
         fi
         log_warn "下载失败 (attempt $attempt/$max): $url"
-        sleep 3
+        sleep 2
     done
-    log_error "下载失败: $url"
+    return 1  # 失败但不 exit，让调用方决定
 }
 
 download_sources() {
@@ -141,19 +141,26 @@ download_sources() {
     tar xf "pcre2-${PCRE2_VERSION}.tar.gz"
 
     log_info "下载 Tongsuo $TONGSUO_VERSION..."
-    # GitHub Release 可能没有源码包，依次尝试 release asset / archive tarball / API tarball
-    dl "https://github.com/Tongsuo-Project/Tongsuo/releases/download/${TONGSUO_VERSION}/Tongsuo-${TONGSUO_VERSION}.tar.gz" "Tongsuo-${TONGSUO_VERSION}.tar.gz" || \
-    dl "https://github.com/Tongsuo-Project/Tongsuo/archive/refs/tags/${TONGSUO_VERSION}.tar.gz" "Tongsuo-${TONGSUO_VERSION}.tar.gz" || \
-    dl "https://api.github.com/repos/Tongsuo-Project/Tongsuo/tarball/${TONGSUO_VERSION}" "Tongsuo-${TONGSUO_VERSION}.tar.gz"
+    # 依次尝试：GitHub release asset / archive tarball / API tarball（最后一个最稳定）
+    if ! dl "https://github.com/Tongsuo-Project/Tongsuo/releases/download/${TONGSUO_VERSION}/Tongsuo-${TONGSUO_VERSION}.tar.gz" "Tongsuo-${TONGSUO_VERSION}.tar.gz"; then
+    if ! dl "https://github.com/Tongsuo-Project/Tongsuo/archive/refs/tags/${TONGSUO_VERSION}.tar.gz" "Tongsuo-${TONGSUO_VERSION}.tar.gz"; then
+    if ! dl "https://api.github.com/repos/Tongsuo-Project/Tongsuo/tarball/${TONGSUO_VERSION}" "Tongsuo-${TONGSUO_VERSION}.tar.gz"; then
+        log_error "Tongsuo 全部镜像下载失败"
+    fi
+    fi
+    fi
     tar xf "Tongsuo-${TONGSUO_VERSION}.tar.gz"
-    # 统一目录名为 Tongsuo
+    # 统一目录名为 Tongsuo（GitHub archive 目录名带 owner 前缀）
     if [ -d "Tongsuo-${TONGSUO_VERSION}" ]; then
         mv "Tongsuo-${TONGSUO_VERSION}" Tongsuo
     elif [ -d "Tongsuo-${TONGSUO_VERSION}-"* ]; then
         mv Tongsuo-${TONGSUO_VERSION}-* Tongsuo
     elif [ -d "Tongsuo-8.5.0-"* ]; then
         mv Tongsuo-*-* Tongsuo
+    elif [ -d "Tongsuo-8.4.0-"* ]; then
+        mv Tongsuo-*-* Tongsuo
     fi
+    [ ! -d "Tongsuo" ] && log_error "解压 Tongsuo 后找不到源码目录"
 
     log_info "下载 Angie $ANGIE_VERSION..."
     dl "https://github.com/webserver-llc/angie/archive/refs/tags/${ANGIE_VERSION}.tar.gz" "angie-${ANGIE_VERSION}.tar.gz"
