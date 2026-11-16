@@ -260,11 +260,15 @@ build_zlib() {
 configure_and_build_angie() {
     local wd=$1
 
-    # 找到 Angie 源码目录（版本号可能有差异）
-    local angie_src
-    angie_src=$(find "$wd" -maxdepth 1 -type d -name "angie-*" | head -n1)
-    if [ -z "$angie_src" ]; then
-        log_error "找不到 Angie 源码目录"
+    # 找到 Angie 源码目录（优先精确匹配解压目录，避免误匹配工作目录本身）
+    local angie_src=""
+    if [ -d "${wd}/angie-${ANGIE_VERSION}" ]; then
+        angie_src="${wd}/angie-${ANGIE_VERSION}"
+    else
+        angie_src=$(find "$wd" -maxdepth 2 -type f -name "configure" -path "*/angie-*/*" | head -n1 | xargs -r dirname)
+    fi
+    if [ -z "$angie_src" ] || [ ! -x "${angie_src}/configure" ]; then
+        log_error "找不到 Angie 源码目录（含 configure）"
     fi
     log_info "Angie 源码目录: $angie_src"
 
