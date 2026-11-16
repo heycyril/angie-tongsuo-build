@@ -141,14 +141,18 @@ download_sources() {
     tar xf "pcre2-${PCRE2_VERSION}.tar.gz"
 
     log_info "下载 Tongsuo $TONGSUO_VERSION..."
+    # GitHub Release 可能没有源码包，依次尝试 release asset / archive tarball / API tarball
     dl "https://github.com/Tongsuo-Project/Tongsuo/releases/download/${TONGSUO_VERSION}/Tongsuo-${TONGSUO_VERSION}.tar.gz" "Tongsuo-${TONGSUO_VERSION}.tar.gz" || \
-      dl "https://github.com/Tongsuo-Project/Tongsuo/archive/refs/tags/${TONGSUO_VERSION}.tar.gz" "Tongsuo-${TONGSUO_VERSION}.tar.gz"
+    dl "https://github.com/Tongsuo-Project/Tongsuo/archive/refs/tags/${TONGSUO_VERSION}.tar.gz" "Tongsuo-${TONGSUO_VERSION}.tar.gz" || \
+    dl "https://api.github.com/repos/Tongsuo-Project/Tongsuo/tarball/${TONGSUO_VERSION}" "Tongsuo-${TONGSUO_VERSION}.tar.gz"
     tar xf "Tongsuo-${TONGSUO_VERSION}.tar.gz"
     # 统一目录名为 Tongsuo
     if [ -d "Tongsuo-${TONGSUO_VERSION}" ]; then
         mv "Tongsuo-${TONGSUO_VERSION}" Tongsuo
     elif [ -d "Tongsuo-${TONGSUO_VERSION}-"* ]; then
         mv Tongsuo-${TONGSUO_VERSION}-* Tongsuo
+    elif [ -d "Tongsuo-8.5.0-"* ]; then
+        mv Tongsuo-*-* Tongsuo
     fi
 
     log_info "下载 Angie $ANGIE_VERSION..."
