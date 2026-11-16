@@ -16,12 +16,21 @@ set -euo pipefail
 : ${PREFIX:="/usr/local/angie"}
 
 # 第三方模块版本
-: ${NGINX_MODULE_VTS_VERSION:="v0.3.2"}
+: ${NGINX_MODULE_VTS_VERSION:="v0.2.7"}
 : ${HEADERS_MORE_VERSION:="v0.37"}
 : ${NGX_CACHE_PURGE_VERSION:="v1.6.3"}
 : ${LUA_NGINX_MODULE_VERSION:="v0.10.27"}
 : ${STREAM_LUA_NGINX_MODULE_VERSION:="v0.0.15"}
 : ${LUAJIT_BRANCH:="v2.1"}
+
+# 带 fallback 的 git clone（优先指定分支，失败用默认分支）
+git_clone() {
+    local branch="$1"; local repo="$2"; local dir="$3"
+    if git clone --depth 1 --branch "$branch" "$repo" "$dir" 2>/dev/null; then
+        return 0
+    fi
+    git clone --depth 1 "$repo" "$dir"
+}
 
 # 架构检测
 ARCH=$(uname -m)
@@ -167,14 +176,14 @@ download_sources() {
     tar xf "angie-${ANGIE_VERSION}.tar.gz"
 
     log_info "下载第三方 Nginx 模块..."
-    git clone --depth 1 --branch "$NGINX_MODULE_VTS_VERSION" https://github.com/vozlt/nginx-module-vts.git
-    git clone --depth 1 --branch "$HEADERS_MORE_VERSION" https://github.com/openresty/headers-more-nginx-module.git
-    git clone --depth 1 --branch "$NGX_CACHE_PURGE_VERSION" https://github.com/nginx-modules/ngx_cache_purge.git
-    git clone --depth 1 --branch "$LUA_NGINX_MODULE_VERSION" https://github.com/openresty/lua-nginx-module.git
-    git clone --depth 1 --branch "$STREAM_LUA_NGINX_MODULE_VERSION" https://github.com/openresty/stream-lua-nginx-module.git
+    git_clone "$NGINX_MODULE_VTS_VERSION" "https://github.com/vozlt/nginx-module-vts.git" nginx-module-vts
+    git_clone "$HEADERS_MORE_VERSION"     "https://github.com/openresty/headers-more-nginx-module.git" headers-more-nginx-module
+    git_clone "$NGX_CACHE_PURGE_VERSION"  "https://github.com/nginx-modules/ngx_cache_purge.git" ngx_cache_purge
+    git_clone "$LUA_NGINX_MODULE_VERSION" "https://github.com/openresty/lua-nginx-module.git" lua-nginx-module
+    git_clone "$STREAM_LUA_NGINX_MODULE_VERSION" "https://github.com/openresty/stream-lua-nginx-module.git" stream-lua-nginx-module
 
     log_info "下载 LuaJIT..."
-    git clone --depth 1 --branch "$LUAJIT_BRANCH" https://github.com/openresty/luajit2.git
+    git_clone "$LUAJIT_BRANCH" "https://github.com/openresty/luajit2.git" luajit2
 
     log_info "所有源码下载完成"
     ls -la "$wd"
