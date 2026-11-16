@@ -11,7 +11,7 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 : ${ANGIE_VERSION:="Angie-1.12.4"}
 : ${TONGSUO_VERSION:="8.5.0"}
-: ${ZLIB_VERSION:="1.3.2"}
+: ${ZLIB_VERSION:="1.4"}
 : ${PCRE2_VERSION:="10.47"}
 : ${PREFIX:="/usr/local/angie"}
 
@@ -107,38 +107,59 @@ prepare_workdir() {
 # ---------------------------------------------------------------------------
 # 3. 下载所有源码
 # ---------------------------------------------------------------------------
+# 带重试的下载函数（GitHub Actions 网络不稳定）
+dl() {
+    local url="$1"; local out="$2"
+    local attempt=0; local max=5
+    while [ $attempt -lt $max ]; do
+        attempt=$((attempt + 1))
+        if curl -fsSL --retry 3 --retry-delay 2 -o "$out" "$url"; then
+            return 0
+        fi
+        log_warn "下载失败 (attempt $attempt/$max): $url"
+        sleep 3
+    done
+    log_error "下载失败: $url"
+}
+
 download_sources() {
     local wd=$1
     cd "$wd"
 
     log_info "下载 Zlib $ZLIB_VERSION..."
-    wget -q "https://zlib.net/zlib-${ZLIB_VERSION}.tar.gz"
+    dl "https://github.com/madler/zlib/releases/download/v${ZLIB_VERSION}/zlib-${ZLIB_VERSION}.tar.gz" "zlib-${ZLIB_VERSION}.tar.gz" || \
+      dl "https://zlib.net/zlib-${ZLIB_VERSION}.tar.gz" "zlib-${ZLIB_VERSION}.tar.gz" || \
+      dl "https://github.com/madler/zlib/archive/refs/tags/v${ZLIB_VERSION}.tar.gz" "zlib-${ZLIB_VERSION}.tar.gz"
     tar xf "zlib-${ZLIB_VERSION}.tar.gz"
+    # GitHub archive 目录名不同，统一一下
+    if [ ! -d "zlib-${ZLIB_VERSION}" ] && [ -d "zlib-${ZLIB_VERSION}-*" ]; then
+        mv zlib-${ZLIB_VERSION}-* "zlib-${ZLIB_VERSION}"
+    fi
 
     log_info "下载 PCRE2 $PCRE2_VERSION..."
-    wget -q "https://github.com/PCRE2Project/pcre2/releases/download/pcre2-${PCRE2_VERSION}/pcre2-${PCRE2_VERSION}.tar.gz"
+    dl "https://github.com/PCRE2Project/pcre2/releases/download/pcre2-${PCRE2_VERSION}/pcre2-${PCRE2_VERSION}.tar.gz" "pcre2-${PCRE2_VERSION}.tar.gz"
     tar xf "pcre2-${PCRE2_VERSION}.tar.gz"
 
     log_info "下载 Tongsuo $TONGSUO_VERSION..."
-    wget -q "https://github.com/Tongsuo-Project/Tongsuo/releases/download/${TONGSUO_VERSION}/Tongsuo-${TONGSUO_VERSION}.tar.gz"
+    dl "https://github.com/Tongsuo-Project/Tongsuo/releases/download/${TONGSUO_VERSION}/Tongsuo-${TONGSUO_VERSION}.tar.gz" "Tongsuo-${TONGSUO_VERSION}.tar.gz" || \
+      dl "https://github.com/Tongsuo-Project/Tongsuo/archive/refs/tags/${TONGSUO_VERSION}.tar.gz" "Tongsuo-${TONGSUO_VERSION}.tar.gz"
     tar xf "Tongsuo-${TONGSUO_VERSION}.tar.gz"
     # 统一目录名为 Tongsuo
-    mv "Tongsuo-${TONGSUO_VERSION}" Tongsuo
+    if [ -d "Tongsuo-${TONGSUO_VERSION}" ]; then
+        mv "Tongsuo-${TONGSUO_VERSION}" Tongsuo
+    elif [ -d "Tongsuo-${TONGSUO_VERSION}-"* ]; then
+        mv Tongsuo-${TONGSUO_VERSION}-* Tongsuo
+    fi
 
     log_info "下载 Angie $ANGIE_VERSION..."
-    wget -q "https://github.com/webserver-llc/angie/archive/refs/tags/${ANGIE_VERSION}.tar.gz" -O "angie-${ANGIE_VERSION}.tar.gz"
+    dl "https://github.com/webserver-llc/angie/archive/refs/tags/${ANGIE_VERSION}.tar.gz" "angie-${ANGIE_VERSION}.tar.gz"
     tar xf "angie-${ANGIE_VERSION}.tar.gz"
 
     log_info "下载第三方 Nginx 模块..."
-    # nginx-module-vts
     git clone --depth 1 --branch "$NGINX_MODULE_VTS_VERSION" https://github.com/vozlt/nginx-module-vts.git
-    # headers-more-nginx-module
     git clone --depth 1 --branch "$HEADERS_MORE_VERSION" https://github.com/openresty/headers-more-nginx-module.git
-    # ngx_cache_purge
     git clone --depth 1 --branch "$NGX_CACHE_PURGE_VERSION" https://github.com/nginx-modules/ngx_cache_purge.git
-    # lua-nginx-module
     git clone --depth 1 --branch "$LUA_NGINX_MODULE_VERSION" https://github.com/openresty/lua-nginx-module.git
-    # stream-lua-nginx-module
     git clone --depth 1 --branch "$STREAM_LUA_NGINX_MODULE_VERSION" https://github.com/openresty/stream-lua-nginx-module.git
 
     log_info "下载 LuaJIT..."
