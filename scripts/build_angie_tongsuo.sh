@@ -480,15 +480,17 @@ SCRIPT
     cp -r "$pkg_dir" "$test_root"
 
     # 一次性 RSA 证书
+    log_info "生成自测 RSA 证书..."
     openssl req -x509 -newkey rsa:2048 -nodes \
         -keyout "${test_root}/cert/rsa/key.pem" -out "${test_root}/cert/rsa/cert.pem" \
-        -days 1 -subj "/CN=selftest-rsa" >/dev/null 2>&1
+        -days 1 -subj "/CN=selftest-rsa" || log_error "RSA 自签证书生成失败"
     # 一次性 SM2 签名/加密双证书（OpenSSL 3.x 支持 SM2）
     for t in sign enc; do
-        openssl ecparam -genkey -name SM2 -out "${test_root}/cert/sm2/server_${t}.key" >/dev/null 2>&1
+        log_info "生成自测 SM2 ${t} 证书..."
+        openssl ecparam -genkey -name SM2 -out "${test_root}/cert/sm2/server_${t}.key" || log_error "SM2 ${t} 私钥生成失败"
         openssl req -new -x509 -sm3 -sm2-id 1234567812345678 \
             -key "${test_root}/cert/sm2/server_${t}.key" -out "${test_root}/cert/sm2/server_${t}.crt" \
-            -days 1 -subj "/CN=selftest-sm2-${t}" >/dev/null 2>&1
+            -days 1 -subj "/CN=selftest-sm2-${t}" || log_error "SM2 ${t} 证书生成失败"
     done
 
     set +e
