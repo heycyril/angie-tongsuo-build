@@ -6,6 +6,10 @@
 # =============================================================================
 set -euo pipefail
 
+# 脚本自身的绝对路径与仓库根目录（必须在任何 cd 之前解析，否则相对路径会失效）
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
 # ---------------------------------------------------------------------------
 # 版本配置（可通过环境变量覆盖）
 # ---------------------------------------------------------------------------
@@ -374,8 +378,7 @@ package_output() {
     mkdir -p "${pkg_dir}/logs"
 
     # 用仓库内的生产配置覆盖默认配置（保留 mime.types 等）
-    local repo_root
-    repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+    local repo_root="$REPO_ROOT"
     if [ -d "${repo_root}/config" ]; then
         log_info "打入仓库配置: ${repo_root}/config"
         cp -f "${repo_root}/config/"*.conf "${pkg_dir}/conf/"
