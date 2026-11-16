@@ -13,7 +13,16 @@ set -euo pipefail
 : ${TONGSUO_VERSION:="8.5.0"}
 : ${ZLIB_VERSION:="1.4"}
 : ${PCRE2_VERSION:="10.47"}
-: ${PREFIX:="/usr/local/angie"}
+
+# 安装根目录：CI(Runner) 非 root 用户无法写 /usr/local，自动改用 $HOME 下的可写目录
+: ${INSTALL_ROOT:="/usr/local"}
+if [ "${GITHUB_ACTIONS:-false}" = "true" ] && [ "$(id -u)" != "0" ]; then
+    INSTALL_ROOT="${HOME}/angie-build/install"
+fi
+: ${PREFIX:="${INSTALL_ROOT}/angie"}
+: ${LUAJIT_PREFIX:="${INSTALL_ROOT}/luajit"}
+: ${PCRE2_PREFIX:="${INSTALL_ROOT}/pcre2"}
+: ${ZLIB_PREFIX:="${INSTALL_ROOT}/zlib"}
 
 # 第三方模块版本
 : ${NGINX_MODULE_VTS_VERSION:="v0.2.7"}
@@ -199,15 +208,17 @@ build_luajit() {
     log_info "编译 LuaJIT 2.1..."
     make -j"$(nproc)"
 
-    log_info "安装 LuaJIT 到 /usr/local/luajit..."
-    make install PREFIX=/usr/local/luajit
+    log_info "安装 LuaJIT 到 ${LUAJIT_PREFIX}..."
+    make install PREFIX="${LUAJIT_PREFIX}"
 
-    # 配置动态库搜索路径
-    echo "/usr/local/luajit/lib" > /etc/ld.so.conf.d/luajit.conf
-    ldconfig
+    # 配置动态库搜索路径（需要 root，CI 下跳过，打包脚本自带 LD_LIBRARY_PATH）
+    if [ "$(id -u)" = "0" ]; then
+        echo "${LUAJIT_PREFIX}/lib" > /etc/ld.so.conf.d/luajit.conf
+        ldconfig
+    fi
 
-    export LUAJIT_LIB=/usr/local/luajit/lib
-    export LUAJIT_INC=/usr/local/luajit/include/luajit-2.1
+    export LUAJIT_LIB=${LUAJIT_PREFIX}/lib
+    export LUAJIT_INC=${LUAJIT_PREFIX}/include/luajit-2.1
     log_info "LuaJIT 安装完成: LUAJIT_LIB=$LUAJIT_LIB, LUAJIT_INC=$LUAJIT_INC"
 }
 
@@ -219,12 +230,12 @@ build_pcre2() {
     cd "${wd}/pcre2-${PCRE2_VERSION}"
 
     log_info "编译 PCRE2..."
-    ./configure --prefix=/usr/local/pcre2 --enable-jit
+    ./configure --prefix="${PCRE2_PREFIX}" --enable-jit
     make -j"$(nproc)"
     make install
 
-    export PCRE2_LIB=/usr/local/pcre2/lib
-    export PCRE2_INC=/usr/local/pcre2/include
+    export PCRE2_LIB="${PCRE2_PREFIX}/lib"
+    export PCRE2_INC="${PCRE2_PREFIX}/include"
     log_info "PCRE2 编译完成"
 }
 
@@ -236,7 +247,7 @@ build_zlib() {
     cd "${wd}/zlib-${ZLIB_VERSION}"
 
     log_info "编译 Zlib..."
-    ./configure --prefix=/usr/local/zlib
+    ./configure --prefix="${ZLIB_PREFIX}"
     make -j"$(nproc)"
     make install
 
@@ -260,8 +271,8 @@ configure_and_build_angie() {
     cd "$angie_src"
 
     # 设置环境变量（用于 LuaJIT）
-    export LUAJIT_LIB=${LUAJIT_LIB:-/usr/local/luajit/lib}
-    export LUAJIT_INC=${LUAJIT_INC:-/usr/local/luajit/include/luajit-2.1}
+    export LUAJIT_LIB=${LUAJIT_LIB:-${LUAJIT_PREFIX}/lib}
+    export LUAJIT_INC=${LUAJIT_INC:-${LUAJIT_PREFIX}/include/luajit-2.1}
 
     log_info "执行 ./configure ..."
     ./configure \
@@ -271,8 +282,8 @@ configure_and_build_angie() {
         --with-openssl="${wd}/Tongsuo" \
         --with-openssl-opt="enable-ntls no-asm" \
         --with-ntls \
-        --with-cc-opt="-I/usr/local/include -I${LUAJIT_INC} -I/usr/include" \
-        --with-ld-opt="-L/usr/local/lib -L${LUAJIT_LIB} -L/usr/lib64 -Wl,-rpath,${LUAJIT_LIB} -ldl -lm" \
+        --with-cc-opt="-I${INSTALL_ROOT}/include -I${LUAJIT_INC} -I/usr/include" \
+        --with-ld-opt="-L${INSTALL_ROOT}/lib -L${LUAJIT_LIB} -L/usr/lib64 -L/usr/lib/x86_64-linux-gnu -Wl,-rpath,${LUAJIT_LIB} -ldl -lm" \
         --add-module="${wd}/nginx-module-vts" \
         --add-module="${wd}/headers-more-nginx-module" \
         --add-module="${wd}/ngx_cache_purge" \
@@ -365,9 +376,9 @@ package_output() {
 
     # 复制 LuaJIT 库（运行时需要）
     mkdir -p "${pkg_dir}/luajit/lib"
-    cp /usr/local/luajit/lib/libluajit* "${pkg_dir}/luajit/lib/" 2>/dev/null || true
+    cp "${LUAJIT_PREFIX}"/lib/libluajit* "${pkg_dir}/luajit/lib/" 2>/dev/null || true
     mkdir -p "${pkg_dir}/luajit/include"
-    cp -r /usr/local/luajit/include/luajit-2.1 "${pkg_dir}/luajit/include/" 2>/dev/null || true
+    cp -r "${LUAJIT_PREFIX}/include/luajit-2.1" "${pkg_dir}/luajit/include/" 2>/dev/null || true
 
     # 创建启动脚本
     cat > "${pkg_dir}/start.sh" << 'SCRIPT'
