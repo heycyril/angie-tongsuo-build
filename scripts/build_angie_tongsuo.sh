@@ -557,6 +557,24 @@ echo "探活：curl -k https://127.0.0.1:8443/healthz"
 SCRIPT
     chmod +x "${pkg_dir}/deploy.sh"
 
+    # 停止脚本
+    cat > "${pkg_dir}/stop.sh" << 'SCRIPT'
+#!/bin/bash
+# 停止 Angie
+DIR="$(cd "$(dirname "$0")" && pwd)"
+exec "${DIR}/start.sh" stop
+SCRIPT
+    chmod +x "${pkg_dir}/stop.sh"
+
+    # 重启脚本
+    cat > "${pkg_dir}/restart.sh" << 'SCRIPT'
+#!/bin/bash
+# 重启 Angie（先校验配置，再 stop -> start）
+DIR="$(cd "$(dirname "$0")" && pwd)"
+exec "${DIR}/start.sh" restart
+SCRIPT
+    chmod +x "${pkg_dir}/restart.sh"
+
     # 打包前自检：产物不含私钥，因此在临时副本里生成一次性自签证书再跑 angie -t。
     # 目的：验证配置语法、include、变量、模块、证书路径全部正确，且临时证书绝不进入安装包。
     log_info "配置自检 (angie -t，使用一次性自签证书)..."
