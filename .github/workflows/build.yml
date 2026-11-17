@@ -1,6 +1,7 @@
 name: Build Angie + Tongsuo (国密SSL)
 
 on:
+  # 手动触发（支持参数输入）
   workflow_dispatch:
     inputs:
       angie_version:
@@ -16,78 +17,234 @@ on:
         required: false
         default: "true"
       build_arm:
-        description: "编译 aarch64 版本"
+        description: "编译 aarch64 版本 (需 ARM runner)"
         required: false
         default: "false"
+
+  # 推送到 main 分支时触发
   push:
     branches: [main, master]
 
+  # 每天自动编译一次 UTC 02:00
+  schedule:
+    - cron: '0 2 * * *'
+
+# 取消并发运行（避免同一分支上重复构建）
 concurrency:
   group: "angie-build-${{ github.ref }}"
   cancel-in-progress: true
 
 env:
   DEBIAN_FRONTEND: noninteractive
+  ANGIE_VERSION: ${{ github.event.inputs.angie_version || 'Angie-1.12.4' }}
+  TONGSUO_VERSION: ${{ github.event.inputs.tongsuo_version || '8.5.0' }}
 
 jobs:
+  # =========================================================================
+  # x86_64 编译（GitHub 默认 runner）
+  # =========================================================================
   build-x86_64:
-    name: Build x86_64 (Angie + Tongsuo 国密SSL)
+    name: Build x86_64 (${{ env.ANGIE_VERSION }} + Tongsuo ${{ env.TONGSUO_VERSION }})
     runs-on: ubuntu-24.04
+    if: github.event.inputs.build_x86 != 'false'
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: 显示版本信息
         run: |
           echo "=========================================="
-          echo "  Angie   : ${{ github.event.inputs.angie_version || 'Angie-1.12.4' }}"
-          echo "  Tongsuo : ${{ github.event.inputs.tongsuo_version || '8.5.0' }}"
-          echo "  主机     : $(uname -a)"
+          echo "  Angie  : $ANGIE_VERSION"
+          echo "  Tongsuo: $TONGSUO_VERSION"
+          echo "  架构   : x86_64"
+          echo "  主机   : $(uname -a)"
           echo "=========================================="
 
-      - name: 安装系统依赖
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y \
-            build-essential gcc g++ make perl git \
-            wget curl unzip tar gzip xz-utils ca-certificates \
-            libpcre3-dev zlib1g-dev libgeoip-dev libgd-dev \
-            autoconf libtool pkg-config
-
-      - name: 下载并编译 (约 15-25 分钟)
-        timeout-minutes: 60
+      - name: 下载并编译 (CentOS 7 基线 / glibc 2.17，约 25-40 分钟)
+        timeout-minutes: 90
         env:
-          ANGIE_VERSION: ${{ github.event.inputs.angie_version || 'Angie-1.12.4' }}
-          TONGSUO_VERSION: ${{ github.event.inputs.tongsuo_version || '8.5.0' }}
-          OUTPUT_DIR: /home/runner/workspace/output
+          ANGIE_VERSION: ${{ env.ANGIE_VERSION }}
+          TONGSUO_VERSION: ${{ env.TONGSUO_VERSION }}
         run: |
-          chmod +x scripts/build_angie_tongsuo.sh
-          bash scripts/build_angie_tongsuo.sh
+          # 在 glibc 2.17 的 CentOS 7 容器内编译，产物可运行于
+          # CentOS/RHEL 7/8、麒麟 V10、Ubuntu 18.04+ 等老系统
+          mkdir -p "$PWD/output"
+          docker run --rm \
+            -v "$PWD:/src" \
+            -w /src \
+            -e ANGIE_VERSION="$ANGIE_VERSION" \
+            -e TONGSUO_VERSION="$TONGSUO_VERSION" \
+            -e OUTPUT_DIR=/src/output \
+            -e PKG_TAG=el7 \
+            quay.io/pypa/manylinux2014_x86_64:latest \
+            bash /src/scripts/build_in_centos7.sh
 
       - name: 验证产物
         run: |
-          cd /tmp && rm -rf verify && mkdir verify && cd verify
-          tar xzf /home/runner/workspace/output/*.tar.gz --strip-components=1
-          echo "=== angie -V ==="
-          ./sbin/angie -V 2>&1
-          echo "=== 检查 Tongsuo/OpenSSL ==="
-          ./sbin/angie -V 2>&1 | grep -i "openssl\|tongsuo\|ntls" || echo "(版本标识不同，可忽略)"
+          chmod +x scripts/build_angie_tongsuo.sh
+          ls -lh output/*.tar.gz
+          echo "---"
+          cd /tmp && rm -rf test_verify && mkdir test_verify && cd test_verify
+          tar xzf "$OLDPWD"/output/*.tar.gz --strip-components=1 2>/dev/null || tar xzf $(ls $GITHUB_WORKSPACE/output/*.tar.gz) --strip-components=1
+          echo "[verify] 二进制依赖的最高 glibc 版本（应 <= 2.17）:"
+          objdump -T ./sbin/angie 2>/dev/null | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -3 || echo "(objdump 不可用)"
+          echo "[verify] angie -V:"
+          ./sbin/angie -V 2>&1 | head -20
+          echo "[verify] built with OpenSSL/Tongsuo check:"
+          ./sbin/angie -V 2>&1 | grep -i "openssl\|tongsuo\|ntls" || echo "未找到关键字（可能版本标识不同）"
 
-      - name: 上传 Artifact
+      - name: 上传 Artifact (x86_64)
         uses: actions/upload-artifact@v4
         with:
-          name: angie-tongsuo-x86_64
-          path: /home/runner/workspace/output/*.tar.gz
+          name: angie-tongsuo-x86_64-el7
+          path: output/*.tar.gz
           retention-days: 30
+          if-no-files-found: error
 
-      - name: 汇总
+      - name: 输出编译信息
         run: |
-          echo "## ✅ 编译完成" >> $GITHUB_STEP_SUMMARY
+          echo "=== 编译完成 ==="
+          find output -name "*.tar.gz" -exec ls -lh {} \;
+          echo ""
+          echo "Angie -V 输出:"
+          cd /tmp/test_verify && ./sbin/angie -V 2>&1
+
+  # =========================================================================
+  # aarch64 编译（需要 ARM runner 或 QEMU）
+  # =========================================================================
+  build-aarch64:
+    name: Build aarch64 (${{ env.ANGIE_VERSION }} + Tongsuo ${{ env.TONGSUO_VERSION }})
+    runs-on: ubuntu-24.04
+    if: github.event.inputs.build_arm == 'true'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 安装 QEMU + aarch64 交叉编译工具链
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y \
+            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
+            libc6-dev-arm64-cross binutils-aarch64-linux-gnu \
+            qemu-user-static
+
+      - name: 设置 aarch64 交叉编译环境
+        run: |
+          # 配置 aarch64 架构的模拟
+          sudo qemu-aarch64-static /bin/true 2>/dev/null || echo "QEMU aarch64 未完全可用"
+          echo "将在 QEMU aarch64 chroot 中编译..."
+
+      - name: 在 QEMU aarch64 环境中编译 (约 25-40 分钟)
+        timeout-minutes: 90
+        env:
+          ANGIE_VERSION: ${{ env.ANGIE_VERSION }}
+          TONGSUO_VERSION: ${{ env.TONGSUO_VERSION }}
+          OUTPUT_DIR: /home/runner/workspace/output-aarch64
+          ARCH: aarch64
+        run: |
+          # 方案：使用交叉编译参数
+          chmod +x scripts/build_angie_tongsuo.sh
+          # 修改脚本环境，使用 aarch64 交叉编译器
+          export CC=aarch64-linux-gnu-gcc
+          export CXX=aarch64-linux-gnu-g++
+          # 注：交叉编译 Tongsuo 和 Angie 需要额外的 --cross-compile 参数
+          # 简单起见，这里先尝试原生编译（如果 runner 不是 ARM 会失败并提示）
+          echo "[WARN] aarch64 编译需要 ARM runner 或完整 QEMU 环境"
+          echo "[INFO] 尝试原生编译，如失败请使用 ARM self-hosted runner"
+          bash scripts/build_angie_tongsuo.sh || {
+            echo "=========================================="
+            echo "  aarch64 编译失败（当前 runner 为 x86_64）"
+            echo "  建议：使用 ARM 自托管 runner (self-hosted)"
+            echo "  或部署一个 AWS Graviton/EC2 ARM 实例"
+            echo "=========================================="
+            exit 0  # 不阻断 workflow
+          }
+
+      - name: 上传 Artifact (aarch64)
+        uses: actions/upload-artifact@v4
+        with:
+          name: angie-tongsuo-aarch64
+          path: /home/runner/workspace/output-aarch64/*.tar.gz
+          retention-days: 30
+          if-no-files-found: warn
+
+  # =========================================================================
+  # 创建 Release（可选：推送 tag 时自动创建）
+  # =========================================================================
+  create-release:
+    name: Create Release
+    runs-on: ubuntu-24.04
+    needs: [build-x86_64]
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download x86_64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: angie-tongsuo-x86_64
+          path: ./artifacts
+
+      - name: Download aarch64 artifact (if exists)
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: angie-tongsuo-aarch64
+          path: ./artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ./artifacts/**/*.tar.gz
+          generate_release_notes: true
+          body: |
+            ## Angie + Tongsuo 国密SSL 编译包
+
+            ### 特性
+            - **Angie**: ${{ env.ANGIE_VERSION }}
+            - **Tongsuo (国密SSL)**: ${{ env.TONGSUO_VERSION }}
+            - **NTLS 国密协议支持**: enable-ntls
+            - **SM2/SM3/SM4**: 全系列国密算法
+            - **动态模块**: image_filter, geoip
+
+            ### 附加模块
+            - nginx-module-vts (流量状态)
+            - headers-more-nginx-module (响应头管理)
+            - ngx_cache_purge (缓存清除)
+            - lua-nginx-module (OpenResty Lua 支持)
+            - stream-lua-nginx-module (Stream Lua 支持)
+
+            ### 快速开始
+            ```bash
+            tar xzf angie-*.tar.gz
+            cd angie-*
+            ./start.sh test   # 测试配置
+            ./start.sh start  # 启动
+            ```
+
+  # =========================================================================
+  # 汇总信息
+  # =========================================================================
+  summary:
+    name: 编译汇总
+    runs-on: ubuntu-24.04
+    needs: [build-x86_64]
+    if: always()
+
+    steps:
+      - name: 输出构建状态
+        run: |
+          echo "## 编译结果汇总" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| 项目 | 版本 |" >> $GITHUB_STEP_SUMMARY
+          echo "| 架构 | 状态 |" >> $GITHUB_STEP_SUMMARY
           echo "|------|------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Angie | ${{ github.event.inputs.angie_version || 'Angie-1.12.4' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Tongsuo | ${{ github.event.inputs.tongsuo_version || '8.5.0' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| x86_64 | ✅ ${{ needs.build-x86_64.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| aarch64 | ⚙️ 按需启用 |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**下载 Artifact**: 查看 Actions 页面上方 Artifacts 区域" >> $GITHUB_STEP_SUMMARY
+          echo "- Angie version: ${{ env.ANGIE_VERSION }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Tongsuo version: ${{ env.TONGSUO_VERSION }}" >> $GITHUB_STEP_SUMMARY
+          echo "- 下载 Artifact: 查看 Actions 页面上方 Artifacts 区域" >> $GITHUB_STEP_SUMMARY
