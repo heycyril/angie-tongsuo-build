@@ -493,9 +493,15 @@ SCRIPT
             -days 1 -subj "/CN=selftest-sm2-${t}" || log_error "SM2 ${t} 证书生成失败"
     done
 
+    # angie -t 会真实创建监听套接字，绑定 80 等特权端口需要 root，故优先用 sudo
+    local riser=""
+    if [ "$(id -u)" -ne 0 ] && sudo -n true 2>/dev/null; then
+        riser="sudo -n env LD_LIBRARY_PATH=${test_root}/luajit/lib"
+    fi
+
     set +e
     local test_out
-    test_out=$(LD_LIBRARY_PATH="${test_root}/luajit/lib:${LD_LIBRARY_PATH:-}" \
+    test_out=$(${riser} LD_LIBRARY_PATH="${test_root}/luajit/lib:${LD_LIBRARY_PATH:-}" \
         "${test_root}/sbin/angie" -p "${test_root}" -c conf/angie.conf -t 2>&1)
     local test_rc=$?
     set -e
