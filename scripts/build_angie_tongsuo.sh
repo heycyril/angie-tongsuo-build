@@ -602,10 +602,19 @@ SCRIPT
             sudo -n "${test_root}/sbin/angie" -p "${test_root}" -c conf/angie.conf -s stop >/dev/null 2>&1
         fi
         set -e
-        rm -rf "$test_root"
         if [ "$hz" = "ok" ]; then
             log_info "启动冒烟测试通过 (healthz=ok)"
+            rm -rf "$test_root"
         else
+            log_warn "healthz 返回: [${hz}]"
+            log_warn "启动时的 error.log:"
+            if [ -f "${test_root}/logs/error.log" ]; then
+                tail -n 20 "${test_root}/logs/error.log"
+            else
+                log_warn "(error.log 不存在，启动阶段即失败)"
+            fi
+            log_warn "resty 库版本要求: $(grep -m1 -o 'ngx_http_lua_module [0-9.]* required' "${test_root}/luajit/share/lua/5.1/resty/core/base.lua" 2>/dev/null || echo '未找到 base.lua')"
+            rm -rf "$test_root"
             log_error "启动冒烟测试失败：Lua 运行时、证书配对或端口绑定有问题"
         fi
     fi
