@@ -49,11 +49,9 @@ yum -y install geoip-devel >/dev/null 2>&1 || warn "geoip-devel 不可用，将�
 # 2. 启用较新的编译器（SCL devtoolset），glibc 仍保持 2.17
 # ---------------------------------------------------------------------------
 for en in /opt/rh/devtoolset-*/enable /opt/rh/gcc-toolset-*/enable; do
-    [ -f "$en" ] && . "$en"
+    if [ -f "$en" ]; then . "$en"; fi
 done
-if [ -f /opt/rh/devtoolset-10/enable ]; then . /opt/rh/devtoolset-10/enable; fi
-if [ -f /opt/rh/devtoolset-11/enable ]; then . /opt/rh/devtoolset-11/enable; fi
-log "编译器: $(gcc --version | head -1)"
+log "编译器: $(gcc --version 2>&1 | sed -n '1p')"
 
 # ---------------------------------------------------------------------------
 # 3. 执行主编译脚本
