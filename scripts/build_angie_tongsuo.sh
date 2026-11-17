@@ -282,6 +282,19 @@ configure_and_build_angie() {
     export LUAJIT_LIB=${LUAJIT_LIB:-${LUAJIT_PREFIX}/lib}
     export LUAJIT_INC=${LUAJIT_INC:-${LUAJIT_PREFIX}/include/luajit-2.1}
 
+    # 可选动态模块：仅在对应头文件存在时启用，保证不同编译基线（el7 / ubuntu）都能编译通过
+    local MOD_OPTS=()
+    if [ -f /usr/include/gd.h ] || [ -f /usr/include/gd/gd.h ]; then
+        MOD_OPTS+=(--with-http_image_filter_module=dynamic)
+    else
+        log_warn "未找到 libgd 头文件，跳过 image_filter 动态模块"
+    fi
+    if [ -f /usr/include/GeoIP.h ]; then
+        MOD_OPTS+=(--with-http_geoip_module=dynamic)
+    else
+        log_warn "未找到 GeoIP 头文件，跳过 geoip 动态模块"
+    fi
+
     log_info "执行 ./configure ..."
     ./configure \
         --prefix="$PREFIX" \
@@ -313,8 +326,7 @@ configure_and_build_angie() {
         --with-http_secure_link_module \
         --with-http_slice_module \
         --with-http_stub_status_module \
-        --with-http_image_filter_module=dynamic \
-        --with-http_geoip_module=dynamic \
+        "${MOD_OPTS[@]}" \
         --with-stream \
         --with-stream_ssl_module \
         --with-stream_ssl_preread_module \
@@ -356,7 +368,8 @@ package_output() {
         log_error "找不到编译好的 Angie 二进制: $angie_bin"
     fi
 
-    local OUTPUT_NAME="angie-${ANGIE_VERSION}_tongsuo-${TONGSUO_VERSION}_${PLATFORM}_$(date +%Y%m%d)"
+    # PKG_TAG 用于区分编译基线，例如 el7 (glibc 2.17)
+    local OUTPUT_NAME="angie-${ANGIE_VERSION}_tongsuo-${TONGSUO_VERSION}_${PLATFORM}_$(date +%Y%m%d)${PKG_TAG:+_${PKG_TAG}}"
 
     log_info "验证编译结果..."
     echo "--------------------------------------------"
@@ -479,43 +492,69 @@ SCRIPT
     rm -rf "$test_root"
     cp -r "$pkg_dir" "$test_root"
 
+    # 自检用 openssl：优先使用刚编译出的 Tongsuo 自带 openssl
+    # （CentOS 7 自带 openssl 1.0.2 不支持 SM2/SM3，会生成失败）
+    local ssl_bin=""
+    for c in "${HOME}/angie-build/Tongsuo/apps/openssl" "${HOME}/angie-build/Tongsuo/openssl"; do
+        if [ -x "$c" ]; then ssl_bin="$c"; break; fi
+    done
+    [ -z "$ssl_bin" ] && ssl_bin="$(command -v openssl || echo openssl)"
+    log_info "自检 openssl: $ssl_bin"
+
+    local selftest_ok=1
     # 一次性 RSA 证书
     log_info "生成自测 RSA 证书..."
-    openssl req -x509 -newkey rsa:2048 -nodes \
+    "$ssl_bin" req -x509 -newkey rsa:2048 -nodes \
         -keyout "${test_root}/cert/rsa/key.pem" -out "${test_root}/cert/rsa/cert.pem" \
-        -days 1 -subj "/CN=selftest-rsa" || log_error "RSA 自签证书生成失败"
-    # 一次性 SM2 签名/加密双证书（OpenSSL 3.x 支持 SM2）
-    for t in sign enc; do
-        log_info "生成自测 SM2 ${t} 证书..."
-        openssl ecparam -genkey -name SM2 -out "${test_root}/cert/sm2/server_${t}.key" || log_error "SM2 ${t} 私钥生成失败"
-        openssl req -new -x509 -sm3 -sigopt "distid:1234567812345678" \
-            -key "${test_root}/cert/sm2/server_${t}.key" -out "${test_root}/cert/sm2/server_${t}.crt" \
-            -days 1 -subj "/CN=selftest-sm2-${t}" || log_error "SM2 ${t} 证书生成失败"
-    done
+        -days 1 -subj "/CN=selftest-rsa" >/dev/null 2>&1 \
+        || { log_warn "RSA 自签证书生成失败，跳过配置自检"; selftest_ok=0; }
+
+    # 一次性 SM2 签名/加密双证书（Tongsuo / OpenSSL 3.x 支持 SM2）
+    if [ $selftest_ok -eq 1 ]; then
+        for t in sign enc; do
+            log_info "生成自测 SM2 ${t} 证书..."
+            if ! "$ssl_bin" ecparam -genkey -name SM2 -out "${test_root}/cert/sm2/server_${t}.key" >/dev/null 2>&1 \
+               || ! "$ssl_bin" req -new -x509 -sm3 -sigopt "distid:1234567812345678" \
+                    -key "${test_root}/cert/sm2/server_${t}.key" \
+                    -out "${test_root}/cert/sm2/server_${t}.crt" \
+                    -days 1 -subj "/CN=selftest-sm2-${t}" >/dev/null 2>&1; then
+                log_warn "SM2 证书生成失败（当前 openssl 不支持国密），跳过配置自检"
+                selftest_ok=0
+                break
+            fi
+        done
+    fi
+    if [ $selftest_ok -eq 0 ]; then
+        log_warn "未执行 angie -t 自检；请部署后手动执行 ./start.sh test"
+        rm -rf "$test_root"
+        selftest_skip=1
+    fi
 
     # 自检环境适配：Debian/Ubuntu 无 nobody 组（用 nogroup），仅改写临时副本，不影响发布产物
-    if ! getent group nobody >/dev/null 2>&1 && getent group nogroup >/dev/null 2>&1; then
-        sed -i 's/^[[:space:]]*user[[:space:]].*/user nobody nogroup;/' "${test_root}/conf/angie.conf"
-    fi
+    if [ "${selftest_skip:-0}" != "1" ]; then
+        if ! getent group nobody >/dev/null 2>&1 && getent group nogroup >/dev/null 2>&1; then
+            sed -i 's/^[[:space:]]*user[[:space:]].*/user nobody nogroup;/' "${test_root}/conf/angie.conf"
+        fi
 
-    # angie -t 会真实创建监听套接字，绑定 80 等特权端口需要 root，故优先用 sudo
-    local riser=""
-    if [ "$(id -u)" -ne 0 ] && sudo -n true 2>/dev/null; then
-        riser="sudo -n env LD_LIBRARY_PATH=${test_root}/luajit/lib"
-    fi
+        # angie -t 会真实创建监听套接字，绑定 80 等特权端口需要 root，故优先用 sudo
+        local riser=""
+        if [ "$(id -u)" -ne 0 ] && sudo -n true 2>/dev/null; then
+            riser="sudo -n env LD_LIBRARY_PATH=${test_root}/luajit/lib"
+        fi
 
-    set +e
-    local test_out
-    test_out=$(${riser} LD_LIBRARY_PATH="${test_root}/luajit/lib:${LD_LIBRARY_PATH:-}" \
-        "${test_root}/sbin/angie" -p "${test_root}" -c conf/angie.conf -t 2>&1)
-    local test_rc=$?
-    set -e
-    echo "$test_out"
-    rm -rf "$test_root"
-    if [ $test_rc -ne 0 ]; then
-        log_error "配置自检失败，请检查 config/ 与 cert/ 路径"
+        set +e
+        local test_out
+        test_out=$(${riser} LD_LIBRARY_PATH="${test_root}/luajit/lib:${LD_LIBRARY_PATH:-}" \
+            "${test_root}/sbin/angie" -p "${test_root}" -c conf/angie.conf -t 2>&1)
+        local test_rc=$?
+        set -e
+        echo "$test_out"
+        rm -rf "$test_root"
+        if [ $test_rc -ne 0 ]; then
+            log_error "配置自检失败，请检查 config/ 与 cert/ 路径"
+        fi
+        log_info "配置自检通过"
     fi
-    log_info "配置自检通过"
 
     # 创建信息文件
     cat > "${pkg_dir}/build_info.txt" << EOF
