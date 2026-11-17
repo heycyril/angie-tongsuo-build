@@ -465,6 +465,10 @@ EOF
 # Angie 启动脚本（带 Tongsuo 国密SSL）
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 export LD_LIBRARY_PATH="${SCRIPT_DIR}/luajit/lib:${LD_LIBRARY_PATH:-}"
+# Lua 模块搜索路径：lua-nginx-module 启动时 require "resty.core"，
+# 仅靠 conf 里的 lua_package_path 不生效，这里用环境变量确保一定能找到
+export LUA_PATH="${SCRIPT_DIR}/luajit/share/lua/5.1/?.lua;${SCRIPT_DIR}/luajit/share/lua/5.1/?/init.lua;;"
+export LUA_CPATH="${SCRIPT_DIR}/luajit/share/lua/5.1/?.so;;"
 
 ANGIE_BIN="${SCRIPT_DIR}/sbin/angie"
 # 关键：-p 指定安装根目录，使 cert/ html/ logs/ 等相对路径正确解析
@@ -570,6 +574,8 @@ SCRIPT
 
         # angie -t 会真实创建监听套接字，绑定 80 等特权端口需要 root
         export LD_LIBRARY_PATH="${test_root}/luajit/lib:${LD_LIBRARY_PATH:-}"
+        export LUA_PATH="${test_root}/luajit/share/lua/5.1/?.lua;${test_root}/luajit/share/lua/5.1/?/init.lua;;"
+        export LUA_CPATH="${test_root}/luajit/share/lua/5.1/?.so;;"
         set +e
         local test_out
         if [ "$(id -u)" -eq 0 ]; then
