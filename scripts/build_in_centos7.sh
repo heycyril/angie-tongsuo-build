@@ -27,11 +27,19 @@ fix_repos() {
 }
 
 install_pkgs() {
-    # 注意：CentOS 7 把部分 Perl 核心模块拆成独立 rpm，OpenSSL/Tongsuo 的 Configure 需要
-    local pkgs="gcc gcc-c++ make perl git curl wget tar gzip unzip which autoconf libtool zlib-devel openssl-devel"
-    pkgs="$pkgs perl-IPC-Cmd perl-Data-Dumper perl-Digest-SHA perl-Time-Piece perl-Thread-Queue perl-Encode perl-FindBin"
-    yum clean all >/dev/null 2>&1 || true
-    yum -y install $pkgs
+    # 逐个安装：任一包名在 vault 源中不存在时，不能让 yum 整体中止
+    # perl-core 提供 CentOS 7 拆分的全部核心 Perl 模块（含 IPC::Cmd，OpenSSL Configure 需要）
+    for p in gcc gcc-c++ make perl perl-core git curl wget tar gzip unzip which \
+             autoconf libtool zlib-devel openssl-devel \
+             perl-IPC-Cmd perl-Data-Dumper perl-Digest-SHA perl-Time-Piece perl-Thread-Queue perl-Encode perl-FindBin; do
+        yum -y install "$p" >/dev/null 2>&1 || warn "跳过 $p（源中不存在或已内置）"
+    done
+    if perl -MIPC::Cmd -e1 >/dev/null 2>&1; then
+        log "Perl IPC::Cmd 可用"
+    else
+        warn "IPC::Cmd 仍缺失，尝试安装 perl-core 后复检"
+        yum -y install perl-core >/dev/null 2>&1 || true
+    fi
 }
 
 log "安装编译依赖..."
