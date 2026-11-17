@@ -87,6 +87,9 @@ jobs:
           echo "---"
           cd /tmp && rm -rf test_verify && mkdir test_verify && cd test_verify
           tar xzf "$OLDPWD"/output/*.tar.gz --strip-components=1 2>/dev/null || tar xzf $(ls $GITHUB_WORKSPACE/output/*.tar.gz) --strip-components=1
+          export LD_LIBRARY_PATH="$PWD/luajit/lib"
+          echo "[verify] 动态依赖:"
+          objdump -p ./sbin/angie 2>/dev/null | grep NEEDED | sed 's/^/  /' || true
           echo "[verify] 二进制依赖的最高 glibc 版本（应 <= 2.17）:"
           objdump -T ./sbin/angie 2>/dev/null | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -3 || echo "(objdump 不可用)"
           echo "[verify] angie -V:"
@@ -108,7 +111,8 @@ jobs:
           find output -name "*.tar.gz" -exec ls -lh {} \;
           echo ""
           echo "Angie -V 输出:"
-          cd /tmp/test_verify && ./sbin/angie -V 2>&1
+          export LD_LIBRARY_PATH="$PWD/luajit/lib"
+          cd /tmp/test_verify && LD_LIBRARY_PATH="$PWD/luajit/lib" ./sbin/angie -V 2>&1
 
   # =========================================================================
   # aarch64 编译（需要 ARM runner 或 QEMU）
