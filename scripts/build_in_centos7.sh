@@ -27,7 +27,9 @@ fix_repos() {
 }
 
 install_pkgs() {
+    # 注意：CentOS 7 把部分 Perl 核心模块拆成独立 rpm，OpenSSL/Tongsuo 的 Configure 需要
     local pkgs="gcc gcc-c++ make perl git curl wget tar gzip unzip which autoconf libtool zlib-devel openssl-devel"
+    pkgs="$pkgs perl-IPC-Cmd perl-Data-Dumper perl-Digest-SHA perl-Time-Piece perl-Thread-Queue perl-Encode perl-FindBin"
     yum clean all >/dev/null 2>&1 || true
     yum -y install $pkgs
 }
