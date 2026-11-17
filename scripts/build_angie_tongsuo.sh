@@ -35,6 +35,9 @@ fi
 : ${LUA_NGINX_MODULE_VERSION:="v0.10.27"}
 : ${STREAM_LUA_NGINX_MODULE_VERSION:="v0.0.15"}
 : ${LUAJIT_BRANCH:="v2.1"}
+# 必须与 lua-nginx-module 版本匹配：v0.1.30 要求 ngx_lua >= 0.10.27
+: ${LUA_RESTY_CORE_BRANCH:="v0.1.30"}
+: ${LUA_RESTY_LRUCACHE_BRANCH:="v0.1.13"}
 
 # 带 fallback 的 git clone（优先指定分支，失败用默认分支）
 git_clone() {
@@ -577,11 +580,34 @@ SCRIPT
         local test_rc=$?
         set -e
         echo "$test_out"
-        rm -rf "$test_root"
         if [ $test_rc -ne 0 ]; then
             log_error "配置自检失败，请检查 config/ 与 cert/ 路径"
         fi
         log_info "配置自检通过"
+
+        # 启动冒烟测试：angie -t 不加载 Lua 运行时，只有真正启动才能暴露
+        # resty.core 版本不匹配、证书配对错误、端口占用等问题
+        set +e
+        if [ "$(id -u)" -eq 0 ]; then
+            "${test_root}/sbin/angie" -p "${test_root}" -c conf/angie.conf >/dev/null 2>&1
+        else
+            sudo -n "${test_root}/sbin/angie" -p "${test_root}" -c conf/angie.conf >/dev/null 2>&1
+        fi
+        sleep 2
+        local hz
+        hz=$(curl -s -m 3 http://127.0.0.1:80/healthz 2>/dev/null || true)
+        if [ "$(id -u)" -eq 0 ]; then
+            "${test_root}/sbin/angie" -p "${test_root}" -c conf/angie.conf -s stop >/dev/null 2>&1
+        else
+            sudo -n "${test_root}/sbin/angie" -p "${test_root}" -c conf/angie.conf -s stop >/dev/null 2>&1
+        fi
+        set -e
+        rm -rf "$test_root"
+        if [ "$hz" = "ok" ]; then
+            log_info "启动冒烟测试通过 (healthz=ok)"
+        else
+            log_error "启动冒烟测试失败：Lua 运行时、证书配对或端口绑定有问题"
+        fi
     fi
 
     # 创建信息文件
