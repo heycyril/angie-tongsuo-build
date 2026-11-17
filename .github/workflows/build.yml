@@ -44,7 +44,7 @@ jobs:
   # x86_64 编译（GitHub 默认 runner）
   # =========================================================================
   build-x86_64:
-    name: Build x86_64 (${{ env.ANGIE_VERSION }} + Tongsuo ${{ env.TONGSUO_VERSION }})
+    name: Build x86_64 (CentOS7 baseline / glibc 2.17)
     runs-on: ubuntu-24.04
     if: github.event.inputs.build_x86 != 'false'
 
@@ -114,7 +114,7 @@ jobs:
   # aarch64 编译（需要 ARM runner 或 QEMU）
   # =========================================================================
   build-aarch64:
-    name: Build aarch64 (${{ env.ANGIE_VERSION }} + Tongsuo ${{ env.TONGSUO_VERSION }})
+    name: Build aarch64 (QEMU cross build)
     runs-on: ubuntu-24.04
     if: github.event.inputs.build_arm == 'true'
 
