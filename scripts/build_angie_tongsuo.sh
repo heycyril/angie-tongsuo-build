@@ -544,15 +544,15 @@ SCRIPT
         fi
 
         # angie -t 会真实创建监听套接字，绑定 80 等特权端口需要 root，故优先用 sudo
-        local riser=""
+        local riser=()
         if [ "$(id -u)" -ne 0 ] && sudo -n true 2>/dev/null; then
-            riser="sudo -n env LD_LIBRARY_PATH=${test_root}/luajit/lib"
+            riser=(sudo -n)
         fi
 
+        export LD_LIBRARY_PATH="${test_root}/luajit/lib:${LD_LIBRARY_PATH:-}"
         set +e
         local test_out
-        test_out=$(${riser} LD_LIBRARY_PATH="${test_root}/luajit/lib:${LD_LIBRARY_PATH:-}" \
-            "${test_root}/sbin/angie" -p "${test_root}" -c conf/angie.conf -t 2>&1)
+        test_out=$("${riser[@]}" "${test_root}/sbin/angie" -p "${test_root}" -c conf/angie.conf -t 2>&1)
         local test_rc=$?
         set -e
         echo "$test_out"
