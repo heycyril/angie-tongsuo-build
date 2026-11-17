@@ -835,7 +835,7 @@ SCRIPT
         fi
         sleep 2
         local hz
-        hz=$(curl -s -m 3 http://127.0.0.1:80/healthz 2>/dev/null || true)
+        hz=$(curl -s -m 3 http://127.0.0.1:18080/healthz 2>/dev/null || true)
         if [ "$(id -u)" -eq 0 ]; then
             "${test_root}/sbin/angie" -p "${test_root}" -c conf/angie.conf -s stop >/dev/null 2>&1
         else
