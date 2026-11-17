@@ -501,6 +501,9 @@ SCRIPT
     [ -z "$ssl_bin" ] && ssl_bin="$(command -v openssl || echo openssl)"
     log_info "自检 openssl: $ssl_bin"
 
+    # Tongsuo 的 openssl 默认读取编译期指定的 openssl.cnf，构建目录内不存在，置空避免报错
+    export OPENSSL_CONF=/dev/null
+
     local selftest_ok=1
     # 一次性 RSA 证书
     log_info "生成自测 RSA 证书..."
