@@ -198,6 +198,10 @@ download_sources() {
     log_info "下载 LuaJIT..."
     git_clone "$LUAJIT_BRANCH" "https://github.com/openresty/luajit2.git" luajit2
 
+    log_info "下载 lua-resty-core / lua-resty-lrucache..."
+    git_clone "${LUA_RESTY_CORE_BRANCH:-master}" "https://github.com/openresty/lua-resty-core.git" lua-resty-core
+    git_clone "${LUA_RESTY_LRUCACHE_BRANCH:-master}" "https://github.com/openresty/lua-resty-lrucache.git" lua-resty-lrucache
+
     log_info "所有源码下载完成"
     ls -la "$wd"
 }
@@ -224,6 +228,21 @@ build_luajit() {
     export LUAJIT_LIB=${LUAJIT_PREFIX}/lib
     export LUAJIT_INC=${LUAJIT_PREFIX}/include/luajit-2.1
     log_info "LuaJIT 安装完成: LUAJIT_LIB=$LUAJIT_LIB, LUAJIT_INC=$LUAJIT_INC"
+}
+
+# 安装 lua-resty-core / lua-resty-lrucache 到 LuaJIT 的 share 目录
+# lua-nginx-module 0.10.x 启动时会 require "resty.core"，缺失会导致启动告警
+install_resty_libs() {
+    local wd=$1
+    mkdir -p "${LUAJIT_PREFIX}/share/lua/5.1"
+    for m in lua-resty-core lua-resty-lrucache; do
+        if [ -d "${wd}/${m}/lib/resty" ]; then
+            cp -r "${wd}/${m}/lib/resty" "${LUAJIT_PREFIX}/share/lua/5.1/" 2>/dev/null || true
+            log_info "已安装 ${m} -> ${LUAJIT_PREFIX}/share/lua/5.1/resty"
+        else
+            log_warn "${m} 源码缺失，跳过"
+        fi
+    done
 }
 
 # ---------------------------------------------------------------------------
@@ -433,6 +452,9 @@ EOF
     cp "${LUAJIT_PREFIX}"/lib/libluajit* "${pkg_dir}/luajit/lib/" 2>/dev/null || true
     mkdir -p "${pkg_dir}/luajit/include"
     cp -r "${LUAJIT_PREFIX}/include/luajit-2.1" "${pkg_dir}/luajit/include/" 2>/dev/null || true
+    # 复制 resty 纯 Lua 库（lua-resty-core / lua-resty-lrucache）
+    mkdir -p "${pkg_dir}/luajit/share"
+    cp -r "${LUAJIT_PREFIX}/share/lua" "${pkg_dir}/luajit/share/" 2>/dev/null || true
 
     # 创建启动脚本（-p 指定 prefix，保证任意目录下都能运行）
     cat > "${pkg_dir}/start.sh" << 'SCRIPT'
@@ -612,6 +634,7 @@ main() {
     wd=$(prepare_workdir)
     download_sources "$wd"
     build_luajit "$wd"
+    install_resty_libs "$wd"
     build_pcre2 "$wd"
     build_zlib "$wd"
     configure_and_build_angie "$wd"
