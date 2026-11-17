@@ -504,10 +504,14 @@ SCRIPT
     local selftest_ok=1
     # 一次性 RSA 证书
     log_info "生成自测 RSA 证书..."
-    "$ssl_bin" req -x509 -newkey rsa:2048 -nodes \
-        -keyout "${test_root}/cert/rsa/key.pem" -out "${test_root}/cert/rsa/cert.pem" \
-        -days 1 -subj "/CN=selftest-rsa" >/dev/null 2>&1 \
-        || { log_warn "RSA 自签证书生成失败，跳过配置自检"; selftest_ok=0; }
+    local rsa_err
+    if ! rsa_err=$("$ssl_bin" req -x509 -newkey rsa:2048 -nodes \
+            -keyout "${test_root}/cert/rsa/key.pem" -out "${test_root}/cert/rsa/cert.pem" \
+            -days 1 -subj "/CN=selftest-rsa" 2>&1); then
+        log_warn "RSA 自签证书生成失败，跳过配置自检"
+        log_warn "openssl 输出: $(printf '%s' "$rsa_err" | tail -3 | tr '\n' ' ')"
+        selftest_ok=0
+    fi
 
     # 一次性 SM2 签名/加密双证书（Tongsuo / OpenSSL 3.x 支持 SM2）
     if [ $selftest_ok -eq 1 ]; then
