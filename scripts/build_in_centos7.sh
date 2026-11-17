@@ -56,17 +56,16 @@ yum -y install gd-devel >/dev/null 2>&1 || warn "gd-devel 不可用，将跳过 
 yum -y install geoip-devel >/dev/null 2>&1 || warn "geoip-devel 不可用，将跳过 geoip"
 
 # ---------------------------------------------------------------------------
-# 2. 修正 libcrypt：manylinux 镜像的 libxcrypt 提供 libcrypt.so -> .so.2，
-#    而 CentOS 7 目标机只有 glibc 的 libcrypt.so.1，必须重定向，否则产物无法启动
+# 2. 清除 libxcrypt：manylinux 镜像里的 libcrypt.so -> libcrypt.so.2，
+#    而 CentOS 7 目标机只有 glibc 的 libcrypt.so.1，否则产物完全无法启动
 # ---------------------------------------------------------------------------
-for d in /usr/lib64 /lib64; do
-    if [ -e "$d/libcrypt.so" ] || [ -L "$d/libcrypt.so" ]; then
-        rm -f "$d/libcrypt.so.pkg"
-        mv "$d/libcrypt.so" "$d/libcrypt.so.pkg"
-        ln -sf /lib64/libcrypt.so.1 "$d/libcrypt.so"
-        log "已重定向 $d/libcrypt.so -> /lib64/libcrypt.so.1"
-    fi
+log "libcrypt 现状:"
+find / -name 'libcrypt.so*' -not -path '/proc/*' 2>/dev/null | sed 's/^/  /' || true
+for f in $(find / -name 'libcrypt.so' -o -name 'libcrypt.so.2*' 2>/dev/null | grep -v '^/proc'); do
+    rm -f "$f" && log "  已删除 $f"
 done
+ln -sf /lib64/libcrypt.so.1 /usr/lib64/libcrypt.so
+log "已建立 /usr/lib64/libcrypt.so -> /lib64/libcrypt.so.1"
 
 # ---------------------------------------------------------------------------
 # 3. 启用较新的编译器（SCL devtoolset），glibc 仍保持 2.17
