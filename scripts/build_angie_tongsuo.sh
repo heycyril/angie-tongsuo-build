@@ -412,6 +412,62 @@ package_output() {
     cp -r "${PREFIX}/html" "${pkg_dir}/html" 2>/dev/null || true
     mkdir -p "${pkg_dir}/logs"
 
+    # 每个端口一张说明主页，浏览器直接访问即可看出该端口用途
+    mk_page() {
+        local dir="$1" port="$2" role="$3" cert="$4" target="$5" color="$6"
+        mkdir -p "${pkg_dir}/html/${dir}"
+        cat > "${pkg_dir}/html/${dir}/index.html" << HTML
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${port} · ${role}</title>
+<style>
+  body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+       font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+       background:linear-gradient(135deg,#0f172a,#1e293b);color:#e2e8f0}
+  .card{background:rgba(30,41,59,.85);border:1px solid #334155;border-radius:14px;
+        padding:40px 48px;max-width:640px;box-shadow:0 20px 50px rgba(0,0,0,.4)}
+  .port{font-size:60px;font-weight:700;color:${color};line-height:1;margin:0 0 6px}
+  .role{font-size:22px;font-weight:600;margin:0 0 22px}
+  table{border-collapse:collapse;width:100%;font-size:14px;line-height:1.9}
+  td{padding:4px 0;vertical-align:top}
+  td:first-child{color:#94a3b8;width:96px;white-space:nowrap}
+  code{background:#0f172a;padding:2px 7px;border-radius:5px;color:#7dd3fc;font-size:13px}
+  .foot{margin-top:24px;padding-top:16px;border-top:1px solid #334155;font-size:12px;color:#64748b}
+</style>
+</head>
+<body>
+<div class="card">
+  <p class="port">${port}</p>
+  <p class="role">${role}</p>
+  <table>
+    <tr><td>端口</td><td><code>${port}</code></td></tr>
+    <tr><td>角色</td><td>${role}</td></tr>
+    <tr><td>证书</td><td>${cert}</td></tr>
+    <tr><td>转发目标</td><td>${target}</td></tr>
+  </table>
+  <div class="foot">Angie + Tongsuo · 国密 SSL</div>
+</div>
+</body>
+</html>
+HTML
+    }
+
+    mk_page http        18080 "本机 · HTTP 明文（后端）" "无（明文）" \
+            "不再转发，本身就是后端" "#38bdf8"
+    mk_page rsa         9443  "本机 · RSA 站点" "cert/rsa/cert.pem + key.pem" \
+            "不转发，静态页直接由本机提供" "#a78bfa"
+    mk_page sm2         8443  "本机 · 国密 SM2 站点" "cert/sm2/server_sign.* + server_enc.*" \
+            "不转发，静态页直接由本机提供" "#34d399"
+    mk_page proxy-sm2   27443 "代理 · 国密 SM2" "cert/sm2/server_sign.* + server_enc.*" \
+            "http://127.0.0.1:18080" "#fbbf24"
+    mk_page proxy-rsa   37443 "代理 · RSA" "cert/rsa/cert.pem + key.pem" \
+            "http://127.0.0.1:18080" "#f472b6"
+    mk_page adaptive    47443 "代理 · 自适应（SM2/RSA 同端口）" "SM2 双证书 + RSA 证书同时加载" \
+            "http://127.0.0.1:18080" "#22d3ee"
+
     # 用仓库内的生产配置覆盖默认配置（保留 mime.types 等）
     local repo_root="$REPO_ROOT"
     if [ -d "${repo_root}/config" ]; then
@@ -644,6 +700,20 @@ export LUA_CPATH="$DIR/luajit/share/lua/5.1/?.so;;"
 echo "== 私钥权限收紧 =="
 chmod 600 cert/rsa/*.pem cert/sm2/*.key 2>/dev/null || true
 chmod +x start.sh sbin/angie
+
+echo "== 证书识别 =="
+for f in cert/rsa/cert.pem cert/rsa/key.pem \
+         cert/sm2/server_sign.crt cert/sm2/server_sign.key \
+         cert/sm2/server_enc.crt  cert/sm2/server_enc.key; do
+    if [ -s "$f" ]; then printf '  [ OK ] %s\n' "$f"; else printf '  [MISS] %s\n' "$f"; fi
+done
+echo "  8443 / 27443 / 47443 -> SM2 双证书   9443 / 37443 -> RSA   18080 -> 明文"
+if [ ! -s cert/sm2/server_sign.key ] || [ ! -s cert/sm2/server_enc.key ]; then
+    echo "  [WARN] SM2 私钥缺失：8443/27443/47443 将无法启动"
+fi
+if [ ! -s cert/rsa/key.pem ]; then
+    echo "  [WARN] RSA 私钥缺失：9443/37443 将无法启动"
+fi
 
 echo "== 版本信息 =="
 ./sbin/angie -V 2>&1 | head -n 2
