@@ -48,9 +48,11 @@ yum -y install geoip-devel >/dev/null 2>&1 || warn "geoip-devel 不可用，将�
 # ---------------------------------------------------------------------------
 # 2. 启用较新的编译器（SCL devtoolset），glibc 仍保持 2.17
 # ---------------------------------------------------------------------------
+set +u          # devtoolset 的 enable 脚本引用了未定义的 MANPATH，需临时关闭 nounset
 for en in /opt/rh/devtoolset-*/enable /opt/rh/gcc-toolset-*/enable; do
     if [ -f "$en" ]; then . "$en"; fi
 done
+set -u
 log "编译器: $(gcc --version 2>&1 | sed -n '1p')"
 
 # ---------------------------------------------------------------------------
