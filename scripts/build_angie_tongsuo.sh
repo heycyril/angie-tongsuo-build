@@ -493,6 +493,11 @@ SCRIPT
             -days 1 -subj "/CN=selftest-sm2-${t}" || log_error "SM2 ${t} 证书生成失败"
     done
 
+    # 自检环境适配：Debian/Ubuntu 无 nobody 组（用 nogroup），仅改写临时副本，不影响发布产物
+    if ! getent group nobody >/dev/null 2>&1 && getent group nogroup >/dev/null 2>&1; then
+        sed -i 's/^[[:space:]]*user[[:space:]].*/user nobody nogroup;/' "${test_root}/conf/angie.conf"
+    fi
+
     # angie -t 会真实创建监听套接字，绑定 80 等特权端口需要 root，故优先用 sudo
     local riser=""
     if [ "$(id -u)" -ne 0 ] && sudo -n true 2>/dev/null; then
