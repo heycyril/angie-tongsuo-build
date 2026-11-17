@@ -462,52 +462,162 @@ EOF
     # 创建启动脚本（-p 指定 prefix，保证任意目录下都能运行）
     cat > "${pkg_dir}/start.sh" << 'SCRIPT'
 #!/bin/bash
-# Angie 启动脚本（带 Tongsuo 国密SSL）
+# Angie 控制脚本（带 Tongsuo 国密SSL）
+# 不带参数即启动；也可 ./start.sh start|stop|reload|restart|test|status
+set -u
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "${SCRIPT_DIR}"
+
 export LD_LIBRARY_PATH="${SCRIPT_DIR}/luajit/lib:${LD_LIBRARY_PATH:-}"
-# Lua 模块搜索路径：lua-nginx-module 启动时 require "resty.core"，
-# 仅靠 conf 里的 lua_package_path 不生效，这里用环境变量确保一定能找到
+# lua-nginx-module 启动时 require "resty.core"，仅靠 conf 里的 lua_package_path 不生效
 export LUA_PATH="${SCRIPT_DIR}/luajit/share/lua/5.1/?.lua;${SCRIPT_DIR}/luajit/share/lua/5.1/?/init.lua;;"
 export LUA_CPATH="${SCRIPT_DIR}/luajit/share/lua/5.1/?.so;;"
 
 ANGIE_BIN="${SCRIPT_DIR}/sbin/angie"
-# 关键：-p 指定安装根目录，使 cert/ html/ logs/ 等相对路径正确解析
 ANGIE_OPTS=(-p "${SCRIPT_DIR}" -c conf/angie.conf)
+PID_FILE="${SCRIPT_DIR}/logs/angie.pid"
+ACTION="${1:-start}"
 
 mkdir -p "${SCRIPT_DIR}/logs"
 
-case "$1" in
-    start)
-        echo "Starting Angie..."
-        "${ANGIE_BIN}" "${ANGIE_OPTS[@]}"
-        ;;
-    stop)
-        echo "Stopping Angie..."
-        "${ANGIE_BIN}" "${ANGIE_OPTS[@]}" -s stop
-        ;;
-    reload)
-        echo "Reloading Angie..."
-        "${ANGIE_BIN}" "${ANGIE_OPTS[@]}" -s reload
-        ;;
-    restart)
-        echo "Restarting Angie..."
-        "${ANGIE_BIN}" "${ANGIE_OPTS[@]}" -s stop
-        sleep 1
-        "${ANGIE_BIN}" "${ANGIE_OPTS[@]}"
-        ;;
-    test)
-        echo "Testing Angie configuration..."
-        "${ANGIE_BIN}" "${ANGIE_OPTS[@]}" -t
-        ;;
-    status)
-        if [ -f "${SCRIPT_DIR}/logs/angie.pid" ]; then
-            echo "Angie running, pid=$(cat "${SCRIPT_DIR}/logs/angie.pid")"
-        else
-            echo "Angie not running"
-        fi
-        ;;
+is_running() {
+    [ -f "${PID_FILE}" ] && [ -n "$(cat "${PID_FILE}" 2>/dev/null)" ] && \
+        kill -0 "$(cat "${PID_FILE}" 2>/dev/null)" 2>/dev/null
+}
+cur_pid()    { cat "${PID_FILE}" 2>/dev/null; }
+worker_num() { ps -o pid= --ppid "$(cur_pid)" 2>/dev/null | wc -l | tr -d ' '; }
+
+show_ports() {
+    echo "  监听配置:"
+    local f p
+    for f in http.conf https-rsa.conf https-sm2.conf proxy-sm2.conf tcp.conf; do
+        [ -f "conf/${f}" ] || continue
+        p=$(grep -hE '^[[:space:]]*listen[[:space:]]' "conf/${f}" 2>/dev/null \
+            | sed 's/^[[:space:]]*listen[[:space:]]*//' | cut -d';' -f1 | tr -d ' ')
+        [ -n "${p}" ] && printf '    %-18s %s\n' "${f}" "${p}"
+    done
+}
+
+do_test() {
+    echo "[1/1] 校验配置 ..."
+    local out
+    if out=$("${ANGIE_BIN}" "${ANGIE_OPTS[@]}" -t 2>&1); then
+        echo "${out}" | sed 's/^/      /'
+        echo "[ OK ] 配置无误"
+        return 0
+    fi
+    echo "${out}" | sed 's/^/      /'
+    echo "[FAIL] 配置有误"
+    return 1
+}
+
+do_start() {
+    if is_running; then
+        echo "[SKIP] 已在运行 (pid $(cur_pid))，如需重启用 ./restart.sh"
+        return 0
+    fi
+    echo "[1/3] 校验配置 ..."
+    local out
+    if ! out=$("${ANGIE_BIN}" "${ANGIE_OPTS[@]}" -t 2>&1); then
+        echo "${out}" | sed 's/^/      /'
+        echo "[FAIL] 配置有误，已取消启动"
+        return 1
+    fi
+    echo "      通过"
+    echo "[2/3] 启动进程 ..."
+    if ! out=$("${ANGIE_BIN}" "${ANGIE_OPTS[@]}" 2>&1); then
+        echo "${out}" | sed 's/^/      /'
+        echo "[FAIL] 启动失败"
+        return 1
+    fi
+    sleep 1
+    echo "[3/3] 检查状态 ..."
+    if is_running; then
+        echo "[ OK ] Angie 已启动，pid=$(cur_pid)，worker=$(worker_num) 个"
+        show_ports
+        return 0
+    fi
+    echo "[FAIL] 进程未存活，最近日志："
+    tail -n 5 logs/error.log 2>/dev/null | sed 's/^/      /'
+    return 1
+}
+
+do_stop() {
+    if ! is_running; then
+        echo "[SKIP] 未在运行"
+        return 0
+    fi
+    local pid; pid=$(cur_pid)
+    echo "[1/2] 停止进程 (pid ${pid}) ..."
+    "${ANGIE_BIN}" "${ANGIE_OPTS[@]}" -s stop 2>&1 | sed 's/^/      /'
+    local i
+    for i in $(seq 1 20); do
+        is_running || break
+        sleep 0.5
+    done
+    echo "[2/2] 检查状态 ..."
+    if is_running; then
+        echo "[WARN] 进程仍在运行 (pid ${pid})"
+        return 1
+    fi
+    echo "[ OK ] 已停止"
+}
+
+do_reload() {
+    if ! is_running; then
+        echo "[FAIL] 未在运行，请先执行 ./start.sh"
+        return 1
+    fi
+    echo "[1/2] 校验配置 ..."
+    local out
+    if ! out=$("${ANGIE_BIN}" "${ANGIE_OPTS[@]}" -t 2>&1); then
+        echo "${out}" | sed 's/^/      /'
+        echo "[FAIL] 配置有误，未重载"
+        return 1
+    fi
+    echo "      通过"
+    echo "[2/2] 发送 reload 信号 ..."
+    "${ANGIE_BIN}" "${ANGIE_OPTS[@]}" -s reload 2>&1 | sed 's/^/      /'
+    sleep 1
+    if is_running; then
+        echo "[ OK ] 配置已重载，pid=$(cur_pid)（worker 平滑替换，连接不中断）"
+        return 0
+    fi
+    echo "[FAIL] 重载后进程异常"
+    return 1
+}
+
+do_restart() {
+    echo "==== 重启 Angie ===="
+    do_stop || true
+    echo
+    do_start
+}
+
+do_status() {
+    if ! is_running; then
+        echo "状态: 未运行"
+        return 3
+    fi
+    local pid; pid=$(cur_pid)
+    echo "状态: 运行中"
+    echo "  pid       : ${pid}"
+    echo "  启动时间  : $(ps -o lstart= -p "${pid}" 2>/dev/null | sed 's/^ *//')"
+    echo "  worker    : $(worker_num) 个"
+    echo "  版本      : $("${ANGIE_BIN}" -V 2>&1 | head -n 1)"
+    show_ports
+}
+
+case "${ACTION}" in
+    start)   do_start ;;
+    stop)    do_stop ;;
+    reload)  do_reload ;;
+    restart) do_restart ;;
+    test)    do_test ;;
+    status)  do_status ;;
     *)
-        echo "Usage: $0 {start|stop|reload|restart|test|status}"
+        echo "未知参数: ${ACTION}"
+        echo "用法: $0 [start|stop|reload|restart|test|status]（不带参数即 start）"
         exit 1
         ;;
 esac
@@ -557,23 +667,16 @@ echo "探活：curl -k https://127.0.0.1:8443/healthz"
 SCRIPT
     chmod +x "${pkg_dir}/deploy.sh"
 
-    # 停止脚本
-    cat > "${pkg_dir}/stop.sh" << 'SCRIPT'
+    # 为每个动作生成独立脚本，统一转发到 start.sh，逻辑不重复
+    for act in stop reload restart test status; do
+        cat > "${pkg_dir}/${act}.sh" << SCRIPT
 #!/bin/bash
-# 停止 Angie
-DIR="$(cd "$(dirname "$0")" && pwd)"
-exec "${DIR}/start.sh" stop
+# ${act} Angie
+DIR="\$(cd "\$(dirname "\$0")" && pwd)"
+exec "\${DIR}/start.sh" ${act}
 SCRIPT
-    chmod +x "${pkg_dir}/stop.sh"
-
-    # 重启脚本
-    cat > "${pkg_dir}/restart.sh" << 'SCRIPT'
-#!/bin/bash
-# 重启 Angie（先校验配置，再 stop -> start）
-DIR="$(cd "$(dirname "$0")" && pwd)"
-exec "${DIR}/start.sh" restart
-SCRIPT
-    chmod +x "${pkg_dir}/restart.sh"
+        chmod +x "${pkg_dir}/${act}.sh"
+    done
 
     # 打包前自检：产物不含私钥，因此在临时副本里生成一次性自签证书再跑 angie -t。
     # 目的：验证配置语法、include、变量、模块、证书路径全部正确，且临时证书绝不进入安装包。
