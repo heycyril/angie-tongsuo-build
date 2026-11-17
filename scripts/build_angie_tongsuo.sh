@@ -490,11 +490,11 @@ worker_num() { ps -o pid= --ppid "$(cur_pid)" 2>/dev/null | wc -l | tr -d ' '; }
 show_ports() {
     echo "  监听配置:"
     local f p
-    for f in http.conf https-rsa.conf https-sm2.conf proxy-sm2.conf tcp.conf; do
-        [ -f "conf/${f}" ] || continue
-        p=$(grep -hE '^[[:space:]]*listen[[:space:]]' "conf/${f}" 2>/dev/null \
-            | sed 's/^[[:space:]]*listen[[:space:]]*//' | cut -d';' -f1 | tr -d ' ')
-        [ -n "${p}" ] && printf '    %-18s %s\n' "${f}" "${p}"
+    for f in conf/http.conf conf/https-*.conf conf/proxy*.conf conf/tcp.conf; do
+        [ -f "${f}" ] || continue
+        p=$(grep -hE '^[[:space:]]*listen[[:space:]]' "${f}" 2>/dev/null \
+            | sed 's/^[[:space:]]*listen[[:space:]]*//' | cut -d';' -f1 | tr -d ' \n')
+        [ -n "${p}" ] && printf '    %-18s %s\n' "$(basename "${f}")" "${p}"
     done
 }
 
@@ -658,7 +658,7 @@ sleep 2
 
 echo
 echo "== 实际监听配置（来自 conf/）=="
-for f in conf/http.conf conf/https-rsa.conf conf/https-sm2.conf conf/proxy-sm2.conf conf/tcp.conf; do
+for f in conf/http.conf conf/https-*.conf conf/proxy*.conf conf/tcp.conf; do
     [ -f "$f" ] || continue
     grep -hE '^[[:space:]]*listen[[:space:]]' "$f" 2>/dev/null | sed "s|^[[:space:]]*|  $(basename "$f")  |"
 done
