@@ -514,6 +514,49 @@ esac
 SCRIPT
     chmod +x "${pkg_dir}/start.sh"
 
+    # 创建一键部署脚本（端口信息从配置文件实时读取，避免与实际监听不一致）
+    cat > "${pkg_dir}/deploy.sh" << 'SCRIPT'
+#!/bin/bash
+# 一键部署：权限修正 -> 版本确认 -> 配置自检 -> 启动
+set -e
+DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$DIR"
+
+if [ "$(id -u)" -ne 0 ]; then
+    echo "请用 root 运行：sudo $0"
+    exit 1
+fi
+
+export LD_LIBRARY_PATH="$DIR/luajit/lib:${LD_LIBRARY_PATH:-}"
+export LUA_PATH="$DIR/luajit/share/lua/5.1/?.lua;$DIR/luajit/share/lua/5.1/?/init.lua;;"
+export LUA_CPATH="$DIR/luajit/share/lua/5.1/?.so;;"
+
+echo "== 私钥权限收紧 =="
+chmod 600 cert/rsa/*.pem cert/sm2/*.key 2>/dev/null || true
+chmod +x start.sh sbin/angie
+
+echo "== 版本信息 =="
+./sbin/angie -V 2>&1 | head -n 2
+
+echo "== 配置自检 =="
+./start.sh test
+
+echo "== 启动 =="
+./start.sh start
+sleep 2
+./start.sh status
+
+echo
+echo "== 实际监听配置（来自 conf/）=="
+for f in conf/http.conf conf/https-rsa.conf conf/https-sm2.conf conf/proxy-sm2.conf conf/tcp.conf; do
+    [ -f "$f" ] || continue
+    grep -hE '^[[:space:]]*listen[[:space:]]' "$f" 2>/dev/null | sed "s|^[[:space:]]*|  $(basename "$f")  |"
+done
+echo
+echo "探活：curl -k https://127.0.0.1:8443/healthz"
+SCRIPT
+    chmod +x "${pkg_dir}/deploy.sh"
+
     # 打包前自检：产物不含私钥，因此在临时副本里生成一次性自签证书再跑 angie -t。
     # 目的：验证配置语法、include、变量、模块、证书路径全部正确，且临时证书绝不进入安装包。
     log_info "配置自检 (angie -t，使用一次性自签证书)..."
