@@ -887,6 +887,17 @@ SCRIPT
             fi
             log_warn "17443 详细请求输出:"
             curl --noproxy '*' -v -m 8 http://127.0.0.1:17443/healthz 2>&1 || true
+            log_warn "临时副本改用直接上游做对照测试:"
+            sed -i 's/proxy_pass[[:space:]]\+backend_18080_tcp;/proxy_pass 127.0.0.1:18080;/' "${test_root}/conf/tcp.conf"
+            if [ "$(id -u)" -eq 0 ]; then
+                "${test_root}/sbin/angie" -p "${test_root}" -c conf/angie.conf -s reload >/dev/null 2>&1
+            else
+                sudo -n "${test_root}/sbin/angie" -p "${test_root}" -c conf/angie.conf -s reload >/dev/null 2>&1
+            fi
+            sleep 2
+            local hz_direct
+            hz_direct=$(curl --noproxy '*' -sS -m 8 http://127.0.0.1:17443/healthz 2>&1 || true)
+            log_warn "直接上游 healthz 返回: [${hz_direct}]"
         fi
         if [ "$(id -u)" -eq 0 ]; then
             "${test_root}/sbin/angie" -p "${test_root}" -c conf/angie.conf -s stop >/dev/null 2>&1
@@ -931,7 +942,7 @@ LuaJIT  : v2.1
 
 编译参数 (angie -V):
 EOF
-    "$angie_bin" -V 2>&1 >> "${pkg_dir}/build_info.txt"
+    "$angie_bin" -V >> "${pkg_dir}/build_info.txt" 2>&1
 
     # 创建 tar.gz 安装包
     log_info "打包为 tar.gz..."
