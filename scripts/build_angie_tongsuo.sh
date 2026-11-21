@@ -39,9 +39,26 @@ fi
 : ${LUA_RESTY_CORE_BRANCH:="v0.1.30"}
 : ${LUA_RESTY_LRUCACHE_BRANCH:="v0.1.13"}
 
+# GitHub 加速前缀：国内网络直连 github.com 超时时，可用环境变量指定镜像
+# 例如 GH_PROXY=https://ghproxy.net 或 https://gh-proxy.com
+: ${GH_PROXY:=""}
+gh_url() {
+    local u="$1"
+    if [ -n "${GH_PROXY}" ]; then
+        case "$u" in
+            https://github.com/*|https://api.github.com/*|https://raw.githubusercontent.com/*)
+                printf '%s/%s' "${GH_PROXY%/}" "$u" ;;
+            *)
+                printf '%s' "$u" ;;
+        esac
+    else
+        printf '%s' "$u"
+    fi
+}
+
 # 带 fallback 的 git clone（优先指定分支，失败用默认分支）
 git_clone() {
-    local branch="$1"; local repo="$2"; local dir="$3"
+    local branch="$1"; local repo; repo="$(gh_url "$2")"; local dir="$3"
     if git clone --depth 1 --branch "$branch" "$repo" "$dir" 2>/dev/null; then
         return 0
     fi
@@ -51,10 +68,17 @@ git_clone() {
 # 架构检测
 ARCH=$(uname -m)
 case "$ARCH" in
-    x86_64|amd64)    PLATFORM="x86_64" ;;
-    aarch64|arm64)   PLATFORM="aarch64" ;;
+    x86_64|amd64)    PLATFORM="x86_64";  MULTIARCH_TRIPLET="x86_64-linux-gnu" ;;
+    aarch64|arm64)   PLATFORM="aarch64"; MULTIARCH_TRIPLET="aarch64-linux-gnu" ;;
     *) echo "ERROR: 不支持的架构 $ARCH" >&2; exit 1 ;;
 esac
+
+# 多架构库目录：Debian/Ubuntu 系用 /usr/lib/<triplet>，CentOS/RHEL 用 /usr/lib64
+if [ -d "/usr/lib/${MULTIARCH_TRIPLET}" ]; then
+    MULTIARCH_LIB_OPT="-L/usr/lib/${MULTIARCH_TRIPLET}"
+else
+    MULTIARCH_LIB_OPT=""
+fi
 
 echo "============================================================"
 echo "  Angie + Tongsuo (国密SSL) 编译脚本"
@@ -99,12 +123,15 @@ install_deps() {
             autoconf libtool pkg-config
     elif command -v yum &>/dev/null; then
         $SUDO yum groupinstall -y "Development Tools" || true
+        # Tongsuo 的 Configure 依赖 IPC::Cmd（CentOS 7 未随 perl 核心安装）
         $SUDO yum install -y \
             gcc gcc-c++ make perl git \
             wget curl unzip tar gzip \
             pcre pcre-devel zlib zlib-devel geoip-devel \
             gd-devel openssl-devel ca-certificates \
-            autoconf libtool pkgconfig
+            autoconf libtool pkgconfig \
+            perl-IPC-Cmd perl-Data-Dumper perl-Digest-SHA perl-Time-Piece \
+            perl-Thread-Queue perl-Encode
     elif command -v dnf &>/dev/null; then
         $SUDO dnf groupinstall -y "Development Tools" || true
         $SUDO dnf install -y \
@@ -134,7 +161,7 @@ prepare_workdir() {
 # ---------------------------------------------------------------------------
 # 带重试的下载函数（成功返回 0，失败返回 1，不退出脚本）
 dl() {
-    local url="$1"; local out="$2"
+    local url; url="$(gh_url "$1")"; local out="$2"
     local attempt=0; local max=5
     while [ $attempt -lt $max ]; do
         attempt=$((attempt + 1))
@@ -323,10 +350,10 @@ configure_and_build_angie() {
         --with-pcre="${wd}/pcre2-${PCRE2_VERSION}" \
         --with-zlib="${wd}/zlib-${ZLIB_VERSION}" \
         --with-openssl="${wd}/Tongsuo" \
-        --with-openssl-opt="enable-ntls no-asm" \
+        --with-openssl-opt="enable-ntls" \
         --with-ntls \
-        --with-cc-opt="-I${INSTALL_ROOT}/include -I${LUAJIT_INC} -I/usr/include" \
-        --with-ld-opt="-L${INSTALL_ROOT}/lib -L${LUAJIT_LIB} -L/usr/lib64 -L/usr/lib/x86_64-linux-gnu -Wl,-rpath,${LUAJIT_LIB} -ldl -lm" \
+        --with-cc-opt="-I${INSTALL_ROOT}/include -I${LUAJIT_INC} -I/usr/include -Wno-error" \
+        --with-ld-opt="-L${INSTALL_ROOT}/lib -L${LUAJIT_LIB} -L/usr/lib64 ${MULTIARCH_LIB_OPT} -Wl,-rpath,${LUAJIT_LIB} -ldl -lm" \
         --add-module="${wd}/nginx-module-vts" \
         --add-module="${wd}/headers-more-nginx-module" \
         --add-module="${wd}/ngx_cache_purge" \
@@ -554,6 +581,13 @@ show_ports() {
     done
 }
 
+show_healthchecks() {
+    echo "  本机探活:"
+    echo "    curl http://127.0.0.1:18080/healthz"
+    echo "    curl http://127.0.0.1:17443/healthz  # TCP 转发，仅 HTTP"
+    echo "    curl -k https://127.0.0.1:9443/healthz"
+}
+
 do_test() {
     echo "[1/1] 校验配置 ..."
     local out
@@ -591,6 +625,7 @@ do_start() {
     if is_running; then
         echo "[ OK ] Angie 已启动，pid=$(cur_pid)，worker=$(worker_num) 个"
         show_ports
+        show_healthchecks
         return 0
     fi
     echo "[FAIL] 进程未存活，最近日志："
@@ -680,10 +715,10 @@ esac
 SCRIPT
     chmod +x "${pkg_dir}/start.sh"
 
-    # 创建一键部署脚本（端口信息从配置文件实时读取，避免与实际监听不一致）
+    # 创建环境配置脚本（不负责启动）
     cat > "${pkg_dir}/deploy.sh" << 'SCRIPT'
 #!/bin/bash
-# 一键部署：权限修正 -> 版本确认 -> 配置自检 -> 启动
+# 一键环境配置：运行目录、权限与证书检查（不负责启动）
 set -e
 DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$DIR"
@@ -693,47 +728,43 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
-export LD_LIBRARY_PATH="$DIR/luajit/lib:${LD_LIBRARY_PATH:-}"
-export LUA_PATH="$DIR/luajit/share/lua/5.1/?.lua;$DIR/luajit/share/lua/5.1/?/init.lua;;"
-export LUA_CPATH="$DIR/luajit/share/lua/5.1/?.so;;"
+echo "== 运行目录与权限 =="
+# worker 以 nobody 运行：安装根目录必须可进入，html 目录必须可遍历、文件必须可读
+mkdir -p logs
+chmod 755 "$DIR" logs
+chmod -R a+rX html
+chmod +x ./*.sh sbin/angie
+echo "  [ OK ] 安装目录、日志目录、主页及脚本权限已配置"
 
 echo "== 私钥权限收紧 =="
-chmod 600 cert/rsa/*.pem cert/sm2/*.key 2>/dev/null || true
-chmod +x start.sh sbin/angie
+chmod 600 cert/rsa/key.pem cert/sm2/*.key 2>/dev/null || true
+echo "  [ OK ] 私钥权限已设置为 0600"
 
 echo "== 证书识别 =="
+missing=0
 for f in cert/rsa/cert.pem cert/rsa/key.pem \
          cert/sm2/server_sign.crt cert/sm2/server_sign.key \
          cert/sm2/server_enc.crt  cert/sm2/server_enc.key; do
-    if [ -s "$f" ]; then printf '  [ OK ] %s\n' "$f"; else printf '  [MISS] %s\n' "$f"; fi
+    if [ -s "$f" ]; then
+        printf '  [ OK ] %s\n' "$f"
+    else
+        printf '  [MISS] %s\n' "$f"
+        missing=1
+    fi
 done
 echo "  8443 / 27443 / 47443 -> SM2 双证书   9443 / 37443 -> RSA   18080 -> 明文"
-if [ ! -s cert/sm2/server_sign.key ] || [ ! -s cert/sm2/server_enc.key ]; then
-    echo "  [WARN] SM2 私钥缺失：8443/27443/47443 将无法启动"
+
+if [ "$missing" -ne 0 ]; then
+    echo
+    echo "[FAIL] 证书文件不完整，请补齐后重新执行 ./deploy.sh"
+    exit 1
 fi
-if [ ! -s cert/rsa/key.pem ]; then
-    echo "  [WARN] RSA 私钥缺失：9443/37443 将无法启动"
-fi
-
-echo "== 版本信息 =="
-./sbin/angie -V 2>&1 | head -n 2
-
-echo "== 配置自检 =="
-./start.sh test
-
-echo "== 启动 =="
-./start.sh start
-sleep 2
-./start.sh status
 
 echo
-echo "== 实际监听配置（来自 conf/）=="
-for f in conf/http.conf conf/https-*.conf conf/proxy*.conf conf/tcp.conf; do
-    [ -f "$f" ] || continue
-    grep -hE '^[[:space:]]*listen[[:space:]]' "$f" 2>/dev/null | sed "s|^[[:space:]]*|  $(basename "$f")  |"
-done
-echo
-echo "探活：curl -k https://127.0.0.1:8443/healthz"
+echo "[ OK ] 环境配置完成，Angie 尚未启动"
+echo "  启动（含配置自检）: ./start.sh"
+echo "  查看运行状态:       ./start.sh status"
+echo "  重启:               ./restart.sh"
 SCRIPT
     chmod +x "${pkg_dir}/deploy.sh"
 
@@ -834,19 +865,21 @@ SCRIPT
             sudo -n "${test_root}/sbin/angie" -p "${test_root}" -c conf/angie.conf >/dev/null 2>&1
         fi
         sleep 2
-        local hz
+        local hz hz_tcp
         hz=$(curl -s -m 3 http://127.0.0.1:18080/healthz 2>/dev/null || true)
+        hz_tcp=$(curl -s -m 3 http://127.0.0.1:17443/healthz 2>/dev/null || true)
         if [ "$(id -u)" -eq 0 ]; then
             "${test_root}/sbin/angie" -p "${test_root}" -c conf/angie.conf -s stop >/dev/null 2>&1
         else
             sudo -n "${test_root}/sbin/angie" -p "${test_root}" -c conf/angie.conf -s stop >/dev/null 2>&1
         fi
         set -e
-        if [ "$hz" = "ok" ]; then
-            log_info "启动冒烟测试通过 (healthz=ok)"
+        if [ "$hz" = "ok" ] && [ "$hz_tcp" = "ok" ]; then
+            log_info "启动冒烟测试通过 (18080=ok, 17443=ok)"
             rm -rf "$test_root"
         else
-            log_warn "healthz 返回: [${hz}]"
+            log_warn "18080 healthz 返回: [${hz}]"
+            log_warn "17443 healthz 返回: [${hz_tcp}]"
             log_warn "启动时的 error.log:"
             if [ -f "${test_root}/logs/error.log" ]; then
                 tail -n 20 "${test_root}/logs/error.log"
@@ -855,7 +888,7 @@ SCRIPT
             fi
             log_warn "resty 库版本要求: $(grep -m1 -o 'ngx_http_lua_module [0-9.]* required' "${test_root}/luajit/share/lua/5.1/resty/core/base.lua" 2>/dev/null || echo '未找到 base.lua')"
             rm -rf "$test_root"
-            log_error "启动冒烟测试失败：Lua 运行时、证书配对或端口绑定有问题"
+            log_error "启动冒烟测试失败：HTTP 后端、TCP 转发、Lua 运行时、证书配对或端口绑定有问题"
         fi
     fi
 
@@ -873,7 +906,7 @@ LuaJIT  : v2.1
 
 国密特性:
   - --with-openssl (内嵌 Tongsuo)
-  - --with-openssl-opt="enable-ntls no-asm"
+  - --with-openssl-opt="enable-ntls"
   - --with-ntls (国密NTLS协议)
 
 编译参数 (angie -V):
