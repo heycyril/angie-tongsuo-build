@@ -898,6 +898,51 @@ SCRIPT
             local hz_direct
             hz_direct=$(curl --noproxy '*' -sS -m 8 http://127.0.0.1:17443/healthz 2>&1 || true)
             log_warn "直接上游 healthz 返回: [${hz_direct}]"
+
+            log_warn "临时副本测试 stream 原生 return 响应:"
+            if [ "$(id -u)" -eq 0 ]; then
+                "${test_root}/sbin/angie" -p "${test_root}" -c conf/angie.conf -s stop >/dev/null 2>&1
+            else
+                sudo -n "${test_root}/sbin/angie" -p "${test_root}" -c conf/angie.conf -s stop >/dev/null 2>&1
+            fi
+            cat > "${test_root}/conf/tcp.conf" <<'EOF'
+server {
+    listen 17443;
+    return "HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\nok\n";
+}
+EOF
+            if [ "$(id -u)" -eq 0 ]; then
+                "${test_root}/sbin/angie" -p "${test_root}" -c conf/angie.conf >/dev/null 2>&1
+            else
+                sudo -n "${test_root}/sbin/angie" -p "${test_root}" -c conf/angie.conf >/dev/null 2>&1
+            fi
+            sleep 2
+            local hz_return
+            hz_return=$(curl --noproxy '*' -sS -m 5 http://127.0.0.1:17443/healthz 2>&1 || true)
+            log_warn "stream return healthz 返回: [${hz_return}]"
+
+            log_warn "临时副本全新启动后直接代理对照:"
+            if [ "$(id -u)" -eq 0 ]; then
+                "${test_root}/sbin/angie" -p "${test_root}" -c conf/angie.conf -s stop >/dev/null 2>&1
+            else
+                sudo -n "${test_root}/sbin/angie" -p "${test_root}" -c conf/angie.conf -s stop >/dev/null 2>&1
+            fi
+            cat > "${test_root}/conf/tcp.conf" <<'EOF'
+server {
+    listen 17443;
+    proxy_pass 127.0.0.1:18080;
+    proxy_connect_timeout 5s;
+}
+EOF
+            if [ "$(id -u)" -eq 0 ]; then
+                "${test_root}/sbin/angie" -p "${test_root}" -c conf/angie.conf >/dev/null 2>&1
+            else
+                sudo -n "${test_root}/sbin/angie" -p "${test_root}" -c conf/angie.conf >/dev/null 2>&1
+            fi
+            sleep 2
+            local hz_direct_fresh
+            hz_direct_fresh=$(curl --noproxy '*' -sS -m 5 http://127.0.0.1:17443/healthz 2>&1 || true)
+            log_warn "全新启动直接代理 healthz 返回: [${hz_direct_fresh}]"
         fi
         if [ "$(id -u)" -eq 0 ]; then
             "${test_root}/sbin/angie" -p "${test_root}" -c conf/angie.conf -s stop >/dev/null 2>&1
