@@ -864,10 +864,17 @@ SCRIPT
         else
             sudo -n "${test_root}/sbin/angie" -p "${test_root}" -c conf/angie.conf >/dev/null 2>&1
         fi
-        sleep 2
-        local hz hz_tcp
-        hz=$(curl -s -m 3 http://127.0.0.1:18080/healthz 2>/dev/null || true)
-        hz_tcp=$(curl -s -m 3 http://127.0.0.1:17443/healthz 2>/dev/null || true)
+        local hz="" hz_tcp="" smoke_attempt
+        for smoke_attempt in 1 2 3 4 5; do
+            hz=$(curl -s -m 3 http://127.0.0.1:18080/healthz 2>/dev/null || true)
+            hz_tcp=$(curl -s -m 3 http://127.0.0.1:17443/healthz 2>/dev/null || true)
+            if [ "$hz" = "ok" ] && [ "$hz_tcp" = "ok" ]; then
+                break
+            fi
+            if [ "$smoke_attempt" -lt 5 ]; then
+                sleep 2
+            fi
+        done
         if [ "$(id -u)" -eq 0 ]; then
             "${test_root}/sbin/angie" -p "${test_root}" -c conf/angie.conf -s stop >/dev/null 2>&1
         else
