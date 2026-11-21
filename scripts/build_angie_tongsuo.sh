@@ -866,8 +866,8 @@ SCRIPT
         fi
         local hz="" hz_tcp="" smoke_attempt
         for smoke_attempt in 1 2 3 4 5; do
-            hz=$(curl -s -m 3 http://127.0.0.1:18080/healthz 2>/dev/null || true)
-            hz_tcp=$(curl -s -m 3 http://127.0.0.1:17443/healthz 2>/dev/null || true)
+            hz=$(curl --noproxy '*' -s -m 8 http://127.0.0.1:18080/healthz 2>/dev/null || true)
+            hz_tcp=$(curl --noproxy '*' -s -m 8 http://127.0.0.1:17443/healthz 2>/dev/null || true)
             if [ "$hz" = "ok" ] && [ "$hz_tcp" = "ok" ]; then
                 break
             fi
@@ -875,6 +875,19 @@ SCRIPT
                 sleep 2
             fi
         done
+        if [ "$hz" != "ok" ] || [ "$hz_tcp" != "ok" ]; then
+            log_warn "自检进程与 TCP 监听:"
+            ps -ef 2>/dev/null | grep '[a]ngie' || true
+            if command -v ss >/dev/null 2>&1; then
+                ss -lntp 2>/dev/null || true
+            elif command -v netstat >/dev/null 2>&1; then
+                netstat -lntp 2>/dev/null || true
+            else
+                log_warn "(ss/netstat 不可用)"
+            fi
+            log_warn "17443 详细请求输出:"
+            curl --noproxy '*' -v -m 8 http://127.0.0.1:17443/healthz 2>&1 || true
+        fi
         if [ "$(id -u)" -eq 0 ]; then
             "${test_root}/sbin/angie" -p "${test_root}" -c conf/angie.conf -s stop >/dev/null 2>&1
         else
